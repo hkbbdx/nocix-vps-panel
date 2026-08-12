@@ -115,6 +115,8 @@ venv.bak/
 /frontend/dist/
 /frontend/node_modules/
 /frontend/**/.review-dist/
+!/frontend/src/lib/
+!/frontend/src/lib/*.ts
 /backend/static/*
 !/backend/static/.gitkeep
 

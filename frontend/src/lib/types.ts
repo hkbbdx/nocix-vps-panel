@@ -1,0 +1,87 @@
+export type TaskStatus =
+  | "stopped"
+  | "running"
+  | "checking"
+  | "ordering"
+  | "paused"
+  | "success"
+  | "failed"
+  | "unknown"
+  | "submitted_pending_confirmation";
+
+export interface Task {
+  id: string;
+  goods_id: string;
+  stock_url: string;
+  cart_url: string;
+  target_price: number;
+  wait_interval: number;
+  operating_system: "debian" | "ubuntu";
+  email: string;
+  new_customer: false;
+  payment_method: "paypal";
+  auto_submit: boolean;
+  password_configured: boolean;
+  status: TaskStatus;
+  last_stock_status: string | null;
+  last_checked_at: string | null;
+  last_error: string | null;
+}
+
+export interface TaskInput {
+  goods_id: string;
+  stock_url?: string;
+  cart_url?: string;
+  target_price: number;
+  wait_interval: number;
+  operating_system: "debian" | "ubuntu";
+  email: string;
+  password?: string;
+  new_customer: false;
+  payment_method: "paypal";
+  auto_submit: true;
+}
+
+export interface Order {
+  id: number;
+  task_id: string;
+  status: "success" | "failed" | "unknown" | string;
+  observed_price: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface LogEntry {
+  id: number;
+  level: string;
+  task_id: string | null;
+  message: string;
+  created_at: string;
+}
+
+export interface Stats {
+  worker_count: number;
+  task_count: number;
+  available_count: number;
+  checking_count: number;
+  ordering_count: number;
+  success_count: number;
+  failure_count: number;
+  order_success_count: number;
+  order_failure_count: number;
+  last_error: string | null;
+}
+
+export interface RuntimeSettings {
+  environment: string;
+  browser_configured: boolean;
+  api_key_configured: boolean;
+  encryption_key_configured: boolean;
+  telegram_enabled: boolean;
+  telegram_configured: boolean;
+  log_level: string;
+}
+
+export interface TaskHistoryEntry extends Order {
+  [key: string]: unknown;
+}
