@@ -48,6 +48,7 @@ class CheckoutWorker:
         self._terminal = False
         self._persistence_blocked = False
         self._stock_was_unavailable = False
+        self._last_stock_status: str | None = None
         self._submit_called = False
 
     def _value(self, name: str, default: Any = None) -> Any:
@@ -293,6 +294,10 @@ class CheckoutWorker:
                 return
             if self._interrupt_requested():
                 return
+            self._log(
+                f"Task {self._task_id()} product {self._product_id()} "
+                "checkout worker started"
+            )
             if self._value("auto_submit", True) is not True:
                 self._fail("auto_submit must be true")
                 return
@@ -305,6 +310,20 @@ class CheckoutWorker:
                 available = self._call_with_url(
                     client.check_stock, self._value("goods_id"), stock_url
                 )
+                stock_status = "available" if available else "out_of_stock"
+                if self._last_stock_status != stock_status:
+                    if stock_status == "available":
+                        message = (
+                            f"Task {self._task_id()} product {self._product_id()} "
+                            "stock available; checkout starting"
+                        )
+                    else:
+                        message = (
+                            f"Task {self._task_id()} product {self._product_id()} "
+                            "stock out_of_stock"
+                        )
+                    self._log(message)
+                    self._last_stock_status = stock_status
                 if available:
                     if self._stock_was_unavailable:
                         self._notify(

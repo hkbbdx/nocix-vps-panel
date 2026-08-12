@@ -146,6 +146,21 @@ class SubmitClient:
         return None
 
 
+class OutOfStockClient:
+    current_url = "https://nocix.net/cart/?id=418"
+    last_price_text = None
+
+    def __init__(self):
+        self.check_calls = 0
+
+    def check_stock(self, goods_id, stock_url=None):
+        self.check_calls += 1
+        return False
+
+    def close(self):
+        return None
+
+
 async def wait_until(predicate, timeout=1.0):
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
@@ -179,6 +194,28 @@ def test_starting_same_task_twice_creates_one_worker(repository):
     assert len(created) == 1
     assert repo.get_task(record.id).status == "stopped"
     asyncio.run(manager.shutdown())
+
+
+def test_default_worker_factory_persists_lifecycle_logs(repository, monkeypatch):
+    repo, settings = repository
+    record = repo.create_task(task_data(password="worker-password"))
+    client = OutOfStockClient()
+    monkeypatch.setattr("nocix_fucker.client.Client", lambda dsn, proxy: client)
+    manager = TaskManager(repo, settings=settings)
+    stop_event = threading.Event()
+    pause_event = threading.Event()
+    worker = manager._default_worker_factory(record, stop_event, pause_event)
+    worker.sleep = lambda seconds: stop_event.set()
+
+    async def exercise():
+        worker.run()
+
+    asyncio.run(exercise())
+
+    messages = [log.message for log in repo.list_logs(record.id, None, 20)]
+    assert any("checkout worker started" in message for message in messages)
+    assert any("out_of_stock" in message for message in messages)
+    assert all("worker-password" not in message for message in messages)
 
 
 def test_explicit_start_retries_an_ordinary_failed_task(repository):

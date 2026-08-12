@@ -75,6 +75,7 @@ class FakeClient:
 class FakeRepository:
     statuses: list[tuple] = field(default_factory=list)
     orders: list[tuple] = field(default_factory=list)
+    logs: list[tuple] = field(default_factory=list)
 
     def get_decrypted_password(self, task_id):
         return "secret-password"
@@ -84,6 +85,9 @@ class FakeRepository:
 
     def create_order(self, task_id, status, observed_price=None, error=None):
         self.orders.append((task_id, status, observed_price, error))
+
+    def append_log(self, level, task_id, message):
+        self.logs.append((level, task_id, message))
 
 
 @dataclass
@@ -168,6 +172,110 @@ def build_worker(client, task=None, **kwargs):
         repository=repository,
         **kwargs,
     ), repository
+
+
+def test_worker_logs_startup_and_first_out_of_stock_result():
+    client = FakeClient([False])
+    stop_event = threading.Event()
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+        stop_event.set()
+
+    logs = []
+    worker, _ = build_worker(
+        client,
+        logger=logs.append,
+        stop_event=stop_event,
+        sleep=sleep,
+        clock=lambda: now[0],
+    )
+
+    worker.run()
+
+    assert len(logs) == 2
+    assert "task-1" in logs[0]
+    assert "418" in logs[0]
+    assert "out_of_stock" in logs[1]
+
+
+def test_worker_does_not_log_identical_stock_checks_every_poll():
+    client = FakeClient([False, False, False, True])
+    logs = []
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    worker, _ = build_worker(
+        client, logger=logs.append, sleep=sleep, clock=lambda: now[0]
+    )
+
+    worker.run()
+
+    stock_logs = [message for message in logs if "stock" in message]
+    assert len(stock_logs) == 2
+    assert sum("out_of_stock" in message for message in stock_logs) == 1
+    assert sum("available" in message for message in stock_logs) == 1
+
+
+def test_worker_logs_stock_transition_and_terminal_outcomes():
+    success_logs = []
+    success_worker, _ = build_worker(
+        FakeClient([False, False, True]), logger=success_logs.append
+    )
+
+    success_worker.run()
+
+    assert any("stock available; checkout starting" in message for message in success_logs)
+    assert any("order submitted" in message for message in success_logs)
+
+    failure_logs = []
+    failure_worker, _ = build_worker(
+        FakeClient([True], prices_match=False), logger=failure_logs.append
+    )
+
+    failure_worker.run()
+
+    assert any("price mismatch" in message for message in failure_logs)
+
+
+def test_worker_lifecycle_logs_are_redacted_and_do_not_include_secrets():
+    logs = []
+    worker, _ = build_worker(
+        FakeClient(
+            [True],
+            submit_result=(
+                "password=secret-password token=paypal-token "
+                "session_cookie=session-cookie card_number=4111111111111111"
+            ),
+        ),
+        logger=logs.append,
+    )
+
+    worker.run()
+
+    joined = " ".join(logs)
+    assert "secret-password" not in joined
+    assert "paypal-token" not in joined
+    assert "session-cookie" not in joined
+    assert "4111111111111111" not in joined
+
+
+def test_worker_continues_checkout_when_persistent_log_callback_fails():
+    client = FakeClient([True])
+
+    def unavailable_log_callback(message):
+        raise RuntimeError("database unavailable")
+
+    worker, repository = build_worker(client, logger=unavailable_log_callback)
+
+    worker.run()
+
+    assert repository.statuses[-1][1] == "success"
+    assert repository.orders[-1][1] == "success"
+    assert client.calls.count(("submit_order",)) == 1
 
 
 def test_worker_waits_when_out_of_stock():
