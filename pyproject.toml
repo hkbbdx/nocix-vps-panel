@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "nocix-fucker"
+version = "0.0.4"
+description = "Order machine from nocix.net automatically"
+authors = ["wky0211 <46506352+wky0211@users.noreply.github.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [
+    { include = "nocix_fucker" },
+    { include = "backend" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.95.2"
+selenium = "^4.3.0"
+loguru = "^0.6.0"
+python-dotenv = "^0.20.0"
+pydantic = "^1.9.1"
+email-validator = "^1.2.1"
+sqlalchemy = ">=2.0,<3.0"
+cryptography = ">=41,<45"
+httpx = ">=0.23,<0.29"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+httpx = ">=0.23,<0.28"
+black = "^22.6.0"
+pylint = "^2.14.5"
+isort = "^5.10.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

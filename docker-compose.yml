@@ -1,0 +1,44 @@
+services:
+  api:
+    container_name: api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      browser:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  browser:
+    container_name: browser
+    image: selenium/standalone-firefox:4.4.3-20220831
+    restart: unless-stopped
+    shm_size: "2gb"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent http://127.0.0.1:4444/wd/hub/status
+          | grep --quiet -E '"ready"[[:space:]]*:[[:space:]]*true'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
