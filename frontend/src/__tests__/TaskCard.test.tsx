@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useTaskHistory } from "../hooks/use-tasks";
 import { TaskCard } from "../components/TaskCard";
+import { I18nProvider } from "../i18n";
 
 vi.mock("../hooks/use-tasks", async () => {
   const actual = await vi.importActual<typeof import("../hooks/use-tasks")>("../hooks/use-tasks");
@@ -19,8 +20,9 @@ const task = {
 };
 
 describe("TaskCard operation locking", () => {
+  beforeEach(() => localStorage.setItem("nocix-language", "en-US"));
   it("disables edit, delete, and history while a mutation is pending", () => {
-    render(<QueryClientProvider client={new QueryClient()}><TaskCard task={task} busy onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></QueryClientProvider>);
+    render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={task} busy onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
     expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /history/i })).toBeDisabled();
@@ -33,7 +35,7 @@ describe("TaskCard operation locking", () => {
       error: new Error("history unavailable"),
       data: undefined,
     } as ReturnType<typeof useTaskHistory>);
-    render(<QueryClientProvider client={new QueryClient()}><TaskCard task={task} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></QueryClientProvider>);
+    render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={task} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
 
     await user.click(screen.getByRole("button", { name: /history/i }));
 
@@ -43,7 +45,7 @@ describe("TaskCard operation locking", () => {
   it.each(["unknown", "submitted_pending_confirmation"] as const)(
     "blocks lifecycle actions for %s tasks and explains manual confirmation",
     (status) => {
-      render(<QueryClientProvider client={new QueryClient()}><TaskCard task={{ ...task, status }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></QueryClientProvider>);
+      render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
 
       expect(screen.queryByRole("button", { name: /start monitor/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /check now/i })).not.toBeInTheDocument();
@@ -56,7 +58,7 @@ describe("TaskCard operation locking", () => {
   it("lets a user explicitly retry an ordinary failed task", async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();
-    render(<QueryClientProvider client={new QueryClient()}><TaskCard task={{ ...task, status: "failed", last_error: "price mismatch" }} onAction={onAction} onEdit={vi.fn()} onDelete={vi.fn()} /></QueryClientProvider>);
+    render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status: "failed", last_error: "price mismatch" }} onAction={onAction} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
 
     await user.click(screen.getByRole("button", { name: /start monitor/i }));
 
@@ -68,7 +70,7 @@ describe("TaskCard operation locking", () => {
   it("locks successful tasks to history and delete", () => {
     const onAction = vi.fn();
     const onEdit = vi.fn();
-    render(<QueryClientProvider client={new QueryClient()}><TaskCard task={{ ...task, status: "success" }} onAction={onAction} onEdit={onEdit} onDelete={vi.fn()} /></QueryClientProvider>);
+    render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status: "success" }} onAction={onAction} onEdit={onEdit} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
 
     expect(screen.queryByRole("button", { name: /start monitor/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /check now/i })).not.toBeInTheDocument();
@@ -80,7 +82,7 @@ describe("TaskCard operation locking", () => {
   it.each(["running", "checking", "ordering"] as const)(
     "locks check and edit for active %s tasks while retaining pause/stop controls",
     (status) => {
-      render(<QueryClientProvider client={new QueryClient()}><TaskCard task={{ ...task, status }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></QueryClientProvider>);
+      render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
 
       expect(screen.queryByRole("button", { name: /check now/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
@@ -96,7 +98,7 @@ describe("TaskCard operation locking", () => {
       data: [{ id: 1, task_id: "task-1", status: "success", observed_price: "$59.00", error: null, created_at: "2026-08-11T00:00:00Z" }],
     } as ReturnType<typeof useTaskHistory>);
     const user = userEvent.setup();
-    render(<QueryClientProvider client={new QueryClient()}><TaskCard task={task} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></QueryClientProvider>);
+    render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={task} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
 
     await user.click(screen.getByRole("button", { name: /history/i }));
 

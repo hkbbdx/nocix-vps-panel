@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { Task, TaskInput } from "../lib/types";
 import { TaskForm } from "./TaskForm";
+import { useTranslation } from "../i18n";
 
 interface TaskDialogProps {
   task?: Task | null;
@@ -13,6 +14,7 @@ interface TaskDialogProps {
 export function TaskDialog({ task, onSubmit, onClose, busy = false, restoreFocusRef }: TaskDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
+  const { t } = useTranslation();
   onCloseRef.current = onClose;
 
   useEffect(() => {
@@ -61,7 +63,7 @@ export function TaskDialog({ task, onSubmit, onClose, busy = false, restoreFocus
       aria-describedby="task-dialog-description"
     >
       <p id="task-dialog-description" className="sr-only">
-        Configure a NOCIX product monitor and its saved account checkout settings.
+        {t("task.dialogDescription")}
       </p>
       <TaskForm task={task} busy={busy} onSubmit={onSubmit} onCancel={onClose} />
     </div>

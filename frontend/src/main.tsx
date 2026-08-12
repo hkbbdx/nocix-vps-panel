@@ -10,7 +10,8 @@ import { Orders } from "./pages/Orders";
 import { Settings } from "./pages/Settings";
 import { Tasks } from "./pages/Tasks";
 import "./styles.css";
+import { I18nProvider } from "./i18n";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 5_000 } } });
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><QueryClientProvider client={queryClient}><BrowserRouter><AuthGate><Layout><Routes><Route path="/" element={<Dashboard />} /><Route path="/tasks" element={<Tasks />} /><Route path="/orders" element={<Orders />} /><Route path="/logs" element={<Logs />} /><Route path="/settings" element={<Settings />} /><Route path="*" element={<Dashboard />} /></Routes></Layout></AuthGate></BrowserRouter></QueryClientProvider></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><QueryClientProvider client={queryClient}><I18nProvider><BrowserRouter><AuthGate><Layout><Routes><Route path="/" element={<Dashboard />} /><Route path="/tasks" element={<Tasks />} /><Route path="/orders" element={<Orders />} /><Route path="/logs" element={<Logs />} /><Route path="/settings" element={<Settings />} /><Route path="*" element={<Dashboard />} /></Routes></Layout></AuthGate></BrowserRouter></I18nProvider></QueryClientProvider></React.StrictMode>);

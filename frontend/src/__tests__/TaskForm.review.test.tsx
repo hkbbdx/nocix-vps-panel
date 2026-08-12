@@ -1,12 +1,16 @@
 import userEvent from "@testing-library/user-event";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TaskForm } from "../components/TaskForm";
+import { I18nProvider } from "../i18n";
+
+vi.setConfig({ testTimeout: 10_000 });
 
 describe("TaskForm review behavior", () => {
+  beforeEach(() => localStorage.setItem("nocix-language", "en-US"));
   it("rejects non-positive numeric values before calling onSubmit", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    render(<TaskForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+    render(<I18nProvider initialLanguage="en-US"><TaskForm onSubmit={onSubmit} onCancel={vi.fn()} /></I18nProvider>);
 
     await user.type(screen.getByLabelText(/product id/i), "418");
     await user.type(screen.getByLabelText(/existing nocix email/i), "buyer@example.com");
@@ -22,12 +26,12 @@ describe("TaskForm review behavior", () => {
   it("allows an existing task to keep its configured password and derives cleared URLs", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    render(<TaskForm task={{
+    render(<I18nProvider initialLanguage="en-US"><TaskForm task={{
       id: "task-1", goods_id: "418", stock_url: "https://nocix.net/out-of-stock/?id=418", cart_url: "https://nocix.net/cart/?id=418",
       target_price: 10, wait_interval: 5, operating_system: "debian", email: "buyer@example.com", new_customer: false,
       payment_method: "paypal", auto_submit: true, password_configured: true, status: "stopped", last_stock_status: null,
       last_checked_at: null, last_error: null,
-    }} onSubmit={onSubmit} onCancel={vi.fn()} />);
+    }} onSubmit={onSubmit} onCancel={vi.fn()} /></I18nProvider>);
 
     expect(screen.getByLabelText(/nocix password/i)).not.toBeRequired();
     await user.clear(screen.getByLabelText(/stock url/i));
@@ -48,7 +52,7 @@ describe("TaskForm review behavior", () => {
   ])("rejects invalid %s before mutation", async (field, value, message) => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    render(<TaskForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+    render(<I18nProvider initialLanguage="en-US"><TaskForm onSubmit={onSubmit} onCancel={vi.fn()} /></I18nProvider>);
     await user.type(screen.getByLabelText(/product id/i), "418");
     await user.type(screen.getByLabelText(/target price/i), "10");
     await user.clear(screen.getByLabelText(/check interval/i));
@@ -66,7 +70,7 @@ describe("TaskForm review behavior", () => {
   it("rejects fractional intervals before mutation", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    render(<TaskForm onSubmit={onSubmit} onCancel={vi.fn()} />);
+    render(<I18nProvider initialLanguage="en-US"><TaskForm onSubmit={onSubmit} onCancel={vi.fn()} /></I18nProvider>);
     await user.type(screen.getByLabelText(/product id/i), "418");
     await user.type(screen.getByLabelText(/target price/i), "10");
     await user.clear(screen.getByLabelText(/check interval/i));

@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { setApiKey } from "../lib/api";
+import { I18nProvider } from "../i18n";
 
 function setViewport(isMobile: boolean) {
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({
@@ -19,6 +20,7 @@ function setViewport(isMobile: boolean) {
 }
 
 describe("responsive navigation", () => {
+  beforeEach(() => localStorage.setItem("nocix-language", "en-US"));
   afterEach(() => vi.unstubAllGlobals());
 
   it("keeps the closed rail hidden from keyboard focus and closes with Escape", async () => {
@@ -26,7 +28,7 @@ describe("responsive navigation", () => {
     setViewport(true);
     setApiKey("test-key");
     const queryClient = new QueryClient();
-    render(<QueryClientProvider client={queryClient}><MemoryRouter><Layout><div>Content</div></Layout></MemoryRouter></QueryClientProvider>);
+    render(<QueryClientProvider client={queryClient}><I18nProvider initialLanguage="en-US"><MemoryRouter><Layout><div>Content</div></Layout></MemoryRouter></I18nProvider></QueryClientProvider>);
     const menu = screen.getByRole("button", { name: /open navigation/i });
     const rail = screen.getByRole("complementary", { hidden: true });
     expect(menu).toHaveAttribute("aria-expanded", "false");
@@ -46,7 +48,7 @@ describe("responsive navigation", () => {
     setViewport(false);
     setApiKey("test-key");
     const queryClient = new QueryClient();
-    render(<QueryClientProvider client={queryClient}><MemoryRouter><Layout><div>Content</div></Layout></MemoryRouter></QueryClientProvider>);
+    render(<QueryClientProvider client={queryClient}><I18nProvider initialLanguage="en-US"><MemoryRouter><Layout><div>Content</div></Layout></MemoryRouter></I18nProvider></QueryClientProvider>);
 
     const rail = screen.getByRole("complementary");
     const tasksLink = screen.getByRole("link", { name: /tasks/i });

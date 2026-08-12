@@ -1,18 +1,11 @@
 import type { TaskStatus } from "../lib/types";
-
-const labels: Record<TaskStatus, string> = {
-  stopped: "Stopped",
-  running: "Running",
-  checking: "Checking",
-  ordering: "Ordering",
-  paused: "Paused",
-  success: "Success",
-  failed: "Failed",
-  unknown: "Unknown",
-  submitted_pending_confirmation: "Pending confirmation",
-};
+import { useTranslation } from "../i18n";
 
 export function StatusDot({ status }: { status: TaskStatus | string }) {
+  const { t } = useTranslation();
+  const labels: Record<TaskStatus, string> = {
+    stopped: t("status.stopped"), running: t("status.running"), checking: t("status.checking"), ordering: t("status.ordering"), paused: t("status.paused"), success: t("status.success"), failed: t("status.failed"), unknown: t("status.unknown"), submitted_pending_confirmation: t("status.pending"),
+  };
   const normalized = (status in labels ? status : "stopped") as TaskStatus;
   return (
     <span className={`status status-${normalized}`}>

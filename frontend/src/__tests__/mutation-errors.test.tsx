@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { render, screen, waitFor } from "@testing-library/react";
 import { Orders } from "../pages/Orders";
 import { setApiKey } from "../lib/api";
+import { I18nProvider } from "../i18n";
 
 describe("destructive mutation feedback", () => {
+  beforeEach(() => localStorage.setItem("nocix-language", "en-US"));
   it("shows an accessible error when clearing orders fails", async () => {
     const user = userEvent.setup();
     setApiKey("test-key");
@@ -20,7 +22,7 @@ describe("destructive mutation feedback", () => {
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(<QueryClientProvider client={queryClient}><Orders /></QueryClientProvider>);
+    render(<QueryClientProvider client={queryClient}><I18nProvider initialLanguage="en-US"><Orders /></I18nProvider></QueryClientProvider>);
     await user.click(await screen.findByRole("button", { name: /clear history/i }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/order service unavailable/i));

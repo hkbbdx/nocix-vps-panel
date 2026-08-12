@@ -1,5 +1,8 @@
 const API_KEY_STORAGE = "nocix-api-key";
 export const unauthorizedEvent = "nocix:unauthorized";
+export const logoutEvent = "nocix:logout";
+export type ApiMessageKey = "api.unauthorized" | "api.requestFailed" | "api.invalidResponse";
+export type Translate = (key: string) => string;
 
 export function getApiKey(): string | null {
   return sessionStorage.getItem(API_KEY_STORAGE);
@@ -15,12 +18,19 @@ export function clearApiKey(): void {
 
 export class ApiError extends Error {
   status: number;
+  messageKey?: ApiMessageKey;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, messageKey?: ApiMessageKey) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.messageKey = messageKey;
   }
+}
+
+export function formatApiError(error: unknown, t: Translate, fallbackKey: string): string {
+  if (error instanceof ApiError && error.messageKey) return t(error.messageKey);
+  return error instanceof Error && error.message ? error.message : t(fallbackKey);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -31,24 +41,37 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(path, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers });
+  } catch {
+    throw new ApiError(0, "", "api.requestFailed");
+  }
   if (response.status === 401) {
     clearApiKey();
-    window.dispatchEvent(new Event(unauthorizedEvent));
-    throw new ApiError(401, "Your API key is no longer valid.");
+    window.dispatchEvent(new CustomEvent(unauthorizedEvent, { detail: { messageKey: "api.unauthorized" } }));
+    throw new ApiError(401, "", "api.unauthorized");
   }
   if (!response.ok) {
-    let message = response.statusText || "Request failed";
+    let message = "";
+    let hasBackendDetail = false;
     try {
       const body = (await response.json()) as { detail?: string };
-      message = body.detail || message;
+      if (body.detail) {
+        message = body.detail;
+        hasBackendDetail = true;
+      }
     } catch {
-      // Keep the HTTP status message when the server has no JSON body.
+      // Use the translated client fallback when the server has no JSON body.
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, hasBackendDetail ? undefined : "api.requestFailed");
   }
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new ApiError(0, "", "api.invalidResponse");
+  }
 }
 
 export const api = {

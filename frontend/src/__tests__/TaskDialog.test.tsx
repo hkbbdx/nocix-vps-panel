@@ -1,12 +1,14 @@
 import userEvent from "@testing-library/user-event";
 import { render, screen } from "@testing-library/react";
 import { TaskDialog } from "../components/TaskDialog";
+import { I18nProvider } from "../i18n";
 
 describe("TaskDialog", () => {
+  beforeEach(() => localStorage.setItem("nocix-language", "en-US"));
   it("exposes dialog semantics, focuses its form, and closes on Escape", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    render(<TaskDialog onSubmit={vi.fn()} onClose={onClose} />);
+    render(<I18nProvider initialLanguage="en-US"><TaskDialog onSubmit={vi.fn()} onClose={onClose} /></I18nProvider>);
 
     const dialog = screen.getByRole("dialog", { name: /watch a nocix product/i });
     expect(dialog).toHaveAttribute("aria-modal", "true");
@@ -25,7 +27,7 @@ describe("TaskDialog", () => {
     opener.dataset.testid = "opener";
     document.body.appendChild(opener);
     opener.focus();
-    const { unmount } = render(<TaskDialog onSubmit={vi.fn()} onClose={onClose} />);
+    const { unmount } = render(<I18nProvider initialLanguage="en-US"><TaskDialog onSubmit={vi.fn()} onClose={onClose} /></I18nProvider>);
     const dialog = screen.getByRole("dialog");
     const buttons = screen.getAllByRole("button");
     const close = screen.getByRole("button", { name: /close task form/i });
