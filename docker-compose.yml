@@ -10,6 +10,8 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      - TZ=Asia/Shanghai
     ports:
       - "8000:8000"
     volumes:
@@ -31,6 +33,8 @@ services:
     container_name: browser
     image: selenium/standalone-firefox:4.4.3-20220831
     restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
     shm_size: "2gb"
     healthcheck:
       test:

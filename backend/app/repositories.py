@@ -477,6 +477,19 @@ class Repository:
             session.refresh(model)
             return self._record(model)
 
+    def set_stock_check_result(self, task_id: str, stock_status: str) -> TaskRecord:
+        """Persist poll data without changing task ownership or lifecycle."""
+        with self.session_factory() as session:
+            model = session.get(Task, task_id)
+            if model is None:
+                raise KeyError(task_id)
+            model.last_stock_status = stock_status
+            model.last_checked_at = utc_now()
+            model.updated_at = utc_now()
+            session.commit()
+            session.refresh(model)
+            return self._record(model)
+
     def create_order(
         self,
         task_id: str,

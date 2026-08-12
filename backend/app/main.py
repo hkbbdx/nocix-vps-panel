@@ -43,7 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     repository=repository,
                     stop_event=stop_event,
                     pause_event=pause_event,
-                    logger=lambda message: repository.append_log("INFO", task.id, message),
+                    logger=lambda level, message: repository.append_log(level, task.id, message),
                     notifier=notifier,
                 )
 

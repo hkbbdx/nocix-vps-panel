@@ -60,6 +60,14 @@ def test_compose_publishes_only_api_port():
     assert "5900:5900" not in compose
 
 
+def test_compose_sets_shanghai_timezone_for_api_and_browser():
+    compose = Path(__file__).parents[1].joinpath("docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert compose.count("TZ=Asia/Shanghai") == 2
+
+
 def test_api_image_bootstraps_bind_mount_before_dropping_privileges():
     dockerfile = Path(__file__).parents[1].joinpath("Dockerfile").read_text(
         encoding="utf-8"

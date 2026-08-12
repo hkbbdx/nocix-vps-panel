@@ -15,7 +15,7 @@ from .redaction import redact_message
 
 ClientFactory = Callable[[], Any]
 Repository = Any
-LogCallback = Callable[[str], None]
+LogCallback = Callable[..., None]
 NotifierCallback = Callable[[str], None]
 
 
@@ -38,7 +38,12 @@ class CheckoutWorker:
         self.task = task
         self.client_factory = client_factory
         self.repository = repository
-        self.logger = logger or logging.getLogger(__name__).info
+        if logger is None:
+            self.logger = lambda level, message: logging.getLogger(__name__).log(
+                getattr(logging, level, logging.INFO), message
+            )
+        else:
+            self.logger = logger
         self.notifier = notifier or (lambda message: None)
         self.sleep = sleep
         self.clock = clock
@@ -50,6 +55,9 @@ class CheckoutWorker:
         self._stock_was_unavailable = False
         self._last_stock_status: str | None = None
         self._submit_called = False
+        self._phase = "checking"
+        self._order_attempt_started = False
+        self._logger_accepts_level = logger is None or self._callback_accepts_level(logger)
 
     def _value(self, name: str, default: Any = None) -> Any:
         if isinstance(self.task, dict):
@@ -62,10 +70,29 @@ class CheckoutWorker:
     def _product_id(self) -> str:
         return str(self._value("goods_id", "unknown"))
 
-    def _log(self, message: str) -> None:
+    @staticmethod
+    def _callback_accepts_level(callback: LogCallback | None) -> bool:
+        if callback is None:
+            return False
+        try:
+            parameters = inspect.signature(callback).parameters.values()
+        except (TypeError, ValueError):
+            return True
+        parameters = list(parameters)
+        return any(
+            parameter.kind is parameter.VAR_POSITIONAL
+            or parameter.kind is parameter.KEYWORD_ONLY
+            or parameter.kind is parameter.POSITIONAL_OR_KEYWORD
+            for parameter in parameters[1:]
+        )
+
+    def _log(self, message: str, level: str = "INFO") -> None:
         safe_message = redact_message(message)
         try:
-            self.logger(safe_message)
+            if self._logger_accepts_level:
+                self.logger(level, safe_message)
+            else:
+                self.logger(safe_message)
         except Exception as exc:
             self._callback_warning("logger", exc)
 
@@ -234,12 +261,13 @@ class CheckoutWorker:
             return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
         return None
 
-    def _fail(self, message: str) -> None:
+    def _fail(self, message: str, *, level: str = "ERROR") -> None:
         safe_message = redact_message(message)
         self._terminal = True
         self._set_status("failed", safe_message)
-        self._order("failed", safe_message)
-        self._log(safe_message)
+        if self._order_attempt_started:
+            self._order("failed", safe_message)
+        self._log(safe_message, level)
         self._notify(f"Task {self._task_id()} failed: {safe_message}")
 
     def _submit_failed(self, message: str) -> None:
@@ -250,12 +278,12 @@ class CheckoutWorker:
             self._submission_persistence_failed(safe_message)
             return
         if final_status in {"unknown", "submitted_pending_confirmation"}:
-            self._log(f"submission outcome unknown: {safe_message}")
+            self._log(f"submission outcome unknown: {safe_message}", "ERROR")
             self._notify(
                 f"Task {self._task_id()} submission outcome unknown: {safe_message}"
             )
             return
-        self._log(safe_message)
+        self._log(safe_message, "ERROR")
         self._notify(f"Task {self._task_id()} failed: {safe_message}")
 
     def _interrupt_after_submit(self, status: str) -> None:
@@ -265,7 +293,7 @@ class CheckoutWorker:
         if self._finalize_submission("submitted_pending_confirmation", "unknown", safe_message) is None:
             self._submission_persistence_failed(safe_message)
             return
-        self._log(safe_message)
+        self._log(safe_message, "ERROR")
         self._notify(f"Task {self._task_id()} submission outcome unknown: {safe_message}")
 
     def _unknown_after_submit(self, message: str) -> None:
@@ -274,7 +302,7 @@ class CheckoutWorker:
         if self._finalize_submission("submitted_pending_confirmation", "unknown", safe_message) is None:
             self._submission_persistence_failed(safe_message)
             return
-        self._log(safe_message)
+        self._log(safe_message, "ERROR")
         self._notify(f"Task {self._task_id()} submission outcome unknown: {safe_message}")
 
     def _submission_persistence_failed(self, message: str) -> None:
@@ -282,7 +310,7 @@ class CheckoutWorker:
         safe_message = redact_message(
             f"submission outcome could not be persisted; task ownership retained: {message}"
         )
-        self._log(safe_message)
+        self._log(safe_message, "ERROR")
         self._notify(f"Task {self._task_id()} submission persistence failure: {safe_message}")
 
     def run(self) -> None:
@@ -311,6 +339,21 @@ class CheckoutWorker:
                     client.check_stock, self._value("goods_id"), stock_url
                 )
                 stock_status = "available" if available else "out_of_stock"
+                try:
+                    set_stock_result = getattr(
+                        self.repository, "set_stock_check_result", None
+                    )
+                    if callable(set_stock_result):
+                        set_stock_result(self._task_id(), stock_status)
+                    else:
+                        self.repository.set_task_check_result(
+                            self._task_id(), stock_status
+                        )
+                except Exception as exc:
+                    self._log(
+                        f"stock check result could not be persisted: {exc}",
+                        "WARNING",
+                    )
                 if self._last_stock_status != stock_status:
                     if stock_status == "available":
                         message = (
@@ -339,6 +382,7 @@ class CheckoutWorker:
 
             if self._interrupt_requested():
                 return
+            self._phase = "ordering"
             self._set_status("ordering")
             cart_url = self._value("cart_url")
             self._call_with_url(client.open_cart, self._value("goods_id"), cart_url)
@@ -356,14 +400,14 @@ class CheckoutWorker:
                 if self._interrupt_requested():
                     return
                 if operating_system != "debian" or not client.select_operating_system("ubuntu"):
-                    self._fail("configured operating system is unavailable")
+                    self._fail("configured operating system is unavailable", level="WARNING")
                     return
             if self._interrupt_requested():
                 return
             if self._interrupt_requested():
                 return
             if not client.match_price(float(self._value("target_price"))):
-                self._fail("price mismatch")
+                self._fail("price mismatch", level="WARNING")
                 return
             if self._interrupt_requested():
                 return
@@ -378,6 +422,7 @@ class CheckoutWorker:
                 email=self._value("email"),
                 password=password,
             )
+            self._order_attempt_started = True
             if self._interrupt_requested():
                 return
             if self._interrupt_requested():
@@ -397,6 +442,7 @@ class CheckoutWorker:
             if self._interrupt_requested():
                 return
             self._submit_called = True
+            self._phase = "submitted"
             result = client.submit_order()
             if self._block_paypal_redirect(client):
                 return
@@ -417,10 +463,10 @@ class CheckoutWorker:
                 return
             if final_status in {"submitted_pending_confirmation", "unknown"}:
                 message = "submission outcome unknown after finalization"
-                self._log(message)
+                self._log(message, "ERROR")
                 self._notify(f"Task {self._task_id()} submission outcome unknown: {message}")
                 return
-            self._log(f"Task {self._task_id()} order submitted")
+            self._log(f"Task {self._task_id()} order submitted", "INFO")
             self._notify(f"Task {self._task_id()} order submitted")
         except Exception as exc:
             if self._submit_called:

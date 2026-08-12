@@ -102,7 +102,7 @@ class TaskManager:
             repository=self.repository,
             stop_event=stop_event,
             pause_event=pause_event,
-            logger=lambda message: self.repository.append_log("INFO", task.id, message),
+            logger=lambda level, message: self.repository.append_log(level, task.id, message),
         )
 
     def _default_check_factory(self, task, stop_event, pause_event):

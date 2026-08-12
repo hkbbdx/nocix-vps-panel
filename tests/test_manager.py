@@ -218,6 +218,45 @@ def test_default_worker_factory_persists_lifecycle_logs(repository, monkeypatch)
     assert all("worker-password" not in message for message in messages)
 
 
+def test_default_worker_factory_persists_pre_submit_exception_as_error(repository, monkeypatch):
+    repo, settings = repository
+    record = repo.create_task(task_data())
+
+    def fail_client(*args, **kwargs):
+        raise RuntimeError("selenium connection failed")
+
+    monkeypatch.setattr("nocix_fucker.client.Client", fail_client)
+    worker = TaskManager(repo, settings=settings)._default_worker_factory(
+        record, threading.Event(), threading.Event()
+    )
+
+    worker.run()
+
+    errors = repo.list_logs(record.id, "ERROR", 20)
+    assert errors
+    assert any("selenium connection failed" in log.message for log in errors)
+    assert repo.list_task_orders(record.id) == []
+
+
+def test_set_task_check_result_preserves_active_status_and_shutdown_marker(repository):
+    repo, _ = repository
+    record = repo.create_task(task_data())
+    repo.set_task_lifecycle(record.id, "checking", running_before_shutdown=True)
+
+    first = repo.set_stock_check_result(record.id, "out_of_stock")
+    second = repo.set_stock_check_result(record.id, "out_of_stock")
+    third = repo.set_stock_check_result(record.id, "available")
+
+    assert first.status == "checking"
+    assert second.status == "checking"
+    assert third.status == "checking"
+    assert third.last_stock_status == "available"
+    assert first.last_checked_at is not None
+    assert second.last_checked_at >= first.last_checked_at
+    assert third.last_checked_at >= second.last_checked_at
+    assert third.running_before_shutdown is True
+
+
 def test_explicit_start_retries_an_ordinary_failed_task(repository):
     repo, settings = repository
     record = repo.create_task(task_data())

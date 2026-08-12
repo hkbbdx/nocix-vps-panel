@@ -32,6 +32,7 @@ class FakeClient:
     submit_result: str | None = None
     current_url: str = "https://nocix.net/cart/?id=418"
     close_error: Exception | None = None
+    open_cart_error: Exception | None = None
     last_price_text: str | None = None
     calls: list[tuple] = field(default_factory=list)
     closed: bool = False
@@ -42,6 +43,8 @@ class FakeClient:
 
     def open_cart(self, goods_id, cart_url=None):
         self.calls.append(("open_cart", goods_id) if cart_url is None else ("open_cart", goods_id, cart_url))
+        if self.open_cart_error is not None:
+            raise self.open_cart_error
 
     def select_operating_system(self, value):
         self.calls.append(("select_operating_system", value))
@@ -76,12 +79,16 @@ class FakeRepository:
     statuses: list[tuple] = field(default_factory=list)
     orders: list[tuple] = field(default_factory=list)
     logs: list[tuple] = field(default_factory=list)
+    stock_results: list[tuple] = field(default_factory=list)
 
     def get_decrypted_password(self, task_id):
         return "secret-password"
 
     def set_task_status(self, task_id, status, error=None):
         self.statuses.append((task_id, status, error))
+
+    def set_task_check_result(self, task_id, stock_status):
+        self.stock_results.append((task_id, stock_status))
 
     def create_order(self, task_id, status, observed_price=None, error=None):
         self.orders.append((task_id, status, observed_price, error))
@@ -218,6 +225,45 @@ def test_worker_does_not_log_identical_stock_checks_every_poll():
     assert len(stock_logs) == 2
     assert sum("out_of_stock" in message for message in stock_logs) == 1
     assert sum("available" in message for message in stock_logs) == 1
+
+
+def test_worker_persists_every_stock_poll_without_changing_task_lifecycle():
+    client = FakeClient([False, False, True])
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    worker, repository = build_worker(
+        client, sleep=sleep, clock=lambda: now[0]
+    )
+
+    worker.run()
+
+    assert repository.stock_results == [
+        ("task-1", "out_of_stock"),
+        ("task-1", "out_of_stock"),
+        ("task-1", "available"),
+    ]
+    assert repository.statuses[0][1] == "checking"
+
+
+def test_worker_continues_when_stock_result_persistence_fails():
+    client = FakeClient([True])
+    logs = []
+
+    class Repository(FakeRepository):
+        def set_stock_check_result(self, task_id, stock_status):
+            raise RuntimeError("database unavailable")
+
+    repository = Repository()
+    worker, _ = build_worker(client, repository=repository, logger=lambda level, message: logs.append((level, message)))
+
+    worker.run()
+
+    assert repository.statuses[-1][1] == "success"
+    assert repository.orders[-1][1] == "success"
+    assert any(level == "WARNING" for level, _ in logs)
 
 
 def test_worker_logs_stock_transition_and_terminal_outcomes():
@@ -437,7 +483,67 @@ def test_worker_stops_on_price_mismatch_without_filling_credentials():
     assert not any(call[0] == "fill_in_customer_info" for call in client.calls)
     assert not any(call[0] == "fill_in_payment_info" for call in client.calls)
     assert len([call for call in client.calls if call[0] == "submit_order"]) == 0
+    assert repository.orders == []
+
+
+@pytest.mark.parametrize(
+    "client_factory",
+    [
+        lambda: (_ for _ in ()).throw(RuntimeError("selenium connection failed")),
+        lambda: FakeClient([True], open_cart_error=RuntimeError("cart unavailable")),
+    ],
+)
+def test_worker_pre_submit_startup_failures_do_not_create_order(client_factory):
+    repository = FakeRepository()
+    worker, _ = build_worker(
+        None,
+        repository=repository,
+        client_factory=client_factory,
+    )
+
+    worker.run()
+
+    assert repository.orders == []
+
+
+def test_worker_payment_failure_creates_failed_order_after_customer_entry():
+    client = FakeClient([True])
+
+    def fail_payment(**kwargs):
+        client.calls.append(("fill_in_payment_info", kwargs))
+        raise RuntimeError("payment failed")
+
+    client.fill_in_payment_info = fail_payment
+    worker, repository = build_worker(client)
+
+    worker.run()
+
     assert repository.orders[-1][1] == "failed"
+
+
+def test_worker_submit_failure_creates_failed_order():
+    client = FakeClient([True], submit_result="submit failed")
+    worker, repository = build_worker(client)
+
+    worker.run()
+
+    assert repository.orders[-1][1:] == ("failed", None, "submit failed")
+
+
+def test_worker_pre_submit_errors_are_logged_as_error_with_two_argument_callback():
+    logs = []
+    worker, _ = build_worker(
+        None,
+        client_factory=lambda: (_ for _ in ()).throw(
+            RuntimeError("selenium connection failed")
+        ),
+        logger=lambda level, message: logs.append((level, message)),
+    )
+
+    worker.run()
+
+    assert logs[-1][0] == "ERROR"
+    assert "selenium connection failed" in logs[-1][1]
 
 
 def test_worker_uses_existing_customer_paypal_flow_without_card_fields():
@@ -523,8 +629,7 @@ def test_worker_blocks_paypal_redirect_and_records_url():
 
     assert not any(call[0] == "fill_in_customer_info" for call in client.calls)
     assert not any(call[0] == "submit_order" for call in client.calls)
-    assert repository.orders[-1][1] == "failed"
-    assert "paypal.com" in repository.orders[-1][3]
+    assert repository.orders == []
 
 
 def test_worker_blocks_paypal_redirect_after_payment_before_continue():
@@ -976,7 +1081,7 @@ def test_observed_price_is_recorded_for_success_failure_and_indeterminate():
     unknown_worker.run()
 
     assert success_repository.orders[-1][2] == "$59.00"
-    assert failure_repository.orders[-1][2] == "$72.00"
+    assert failure_repository.orders == []
     assert unknown_repository.orders[-1][2] == "$59.00"
 
 
