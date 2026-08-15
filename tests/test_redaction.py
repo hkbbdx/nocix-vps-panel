@@ -108,6 +108,15 @@ def test_redaction_covers_sensitive_key_value_forms():
     assert redacted.count(REDACTION_MARKER) == 12
 
 
+def test_redaction_hides_raw_at_proxy_passwords_without_leaking_the_suffix():
+    raw = "http://proxy-user:raw@secret@proxy.example:8080"
+    redacted = redact_message(f"proxy failed at {raw}")
+
+    assert "raw@secret" not in redacted
+    assert "proxy-user" not in redacted
+    assert "proxy.example:8080" in redacted
+
+
 def test_redaction_covers_json_like_payloads():
     message = (
         '{"password":"pw","cc_num":"4111","cc_ccv":"123",'

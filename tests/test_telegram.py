@@ -150,6 +150,25 @@ def test_notifier_sends_redacted_task_and_product_message_with_ten_second_timeou
     assert "card_number=***REDACTED***" in text
 
 
+def test_notifier_redacts_raw_at_proxy_passwords(repository):
+    repo, settings, key = repository
+    configure(repo, key)
+    requests = []
+    notifier = notifier_for(
+        repo,
+        settings,
+        httpx.MockTransport(
+            lambda request: requests.append(request) or httpx.Response(200, json={"ok": True})
+        ),
+    )
+
+    assert run(notifier.send("proxy failed: http://user:raw@secret@proxy.example:8080")) is True
+    text = httpx.QueryParams(requests[0].content.decode())["text"]
+    assert "raw@secret" not in text
+    assert "user" not in text
+    assert "proxy.example:8080" in text
+
+
 def test_notifier_reports_success_for_valid_telegram_response(repository):
     repo, settings, key = repository
     configure(repo, key)

@@ -15,7 +15,7 @@ vi.mock("../hooks/use-tasks", async () => {
 const task = {
   id: "task-1", goods_id: "418", stock_url: "https://nocix.net/out-of-stock/?id=418", cart_url: "https://nocix.net/cart/?id=418",
   target_price: 10, wait_interval: 5, operating_system: "debian" as const, email: "buyer@example.com", new_customer: false as const,
-  payment_method: "paypal" as const, auto_submit: true, password_configured: true, status: "stopped" as const, last_stock_status: null,
+  payment_method: "paypal" as const, auto_submit: true, proxy_mode: "inherit" as const, proxy_configured: false, effective_proxy_configured: false, password_configured: true, status: "stopped" as const, last_stock_status: null,
   last_checked_at: null, last_error: null,
 };
 

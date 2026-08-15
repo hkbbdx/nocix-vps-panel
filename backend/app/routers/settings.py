@@ -1,33 +1,8 @@
-import re
-from typing import Literal, Optional
-
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field, validator
 
 from ..security import require_api_key
-
-
-class SettingsUpdate(BaseModel):
-    log_level: Optional[Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]] = None
-    telegram_enabled: Optional[bool] = None
-    telegram_bot_token: Optional[str] = Field(default=None, min_length=26, max_length=256)
-    telegram_chat_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
-
-    @validator("telegram_bot_token")
-    def validate_telegram_bot_token(cls, value):
-        if value is not None and not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{20,}", value):
-            raise ValueError("invalid Telegram bot token format")
-        return value
-
-    @validator("telegram_chat_id")
-    def validate_telegram_chat_id(cls, value):
-        if value is not None and not re.fullmatch(r"-?\d{1,20}", value):
-            raise ValueError("Telegram chat ID must be numeric")
-        return value
-
-    class Config:
-        extra = "forbid"
+from ..schemas import SettingsUpdate
 
 router = APIRouter(prefix="/api/settings", dependencies=[Depends(require_api_key)])
 
@@ -46,6 +21,7 @@ async def get_settings(request: Request):
         "log_level": (
             repository.get_setting("log_level") or settings.log_level
         ).upper(),
+        **repository.get_proxy_settings(),
     }
 
 
@@ -55,12 +31,23 @@ async def update_settings(payload: SettingsUpdate, request: Request):
     values = payload.dict(exclude_unset=True)
     encrypted = {}
     cipher = Fernet(request.app.state.settings.data_encryption_key.encode("ascii"))
+    proxy_kwargs = {}
+    if "proxy_enabled" in values:
+        proxy_kwargs["proxy_enabled"] = values.pop("proxy_enabled")
+    if "proxy_url" in values:
+        proxy_url = values.pop("proxy_url")
+        proxy_url_ciphertext = (
+            cipher.encrypt(proxy_url.encode("utf-8")).decode("ascii")
+            if proxy_url is not None
+            else None
+        )
+        proxy_kwargs["proxy_url_ciphertext"] = proxy_url_ciphertext
     for key, value in values.items():
         if key in {"telegram_bot_token", "telegram_chat_id"}:
             encrypted[key] = cipher.encrypt(str(value).encode("utf-8")).decode("ascii")
         else:
             encrypted[key] = str(value).lower() if isinstance(value, bool) else str(value)
-    repository.set_settings(encrypted)
+    repository.set_settings_atomic(encrypted, **proxy_kwargs)
     return await get_settings(request)
 
 

@@ -9,8 +9,12 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .models import Log, Order, Setting, Task, utc_now
+from .proxy import ProxyConfig, parse_proxy_url
 from .redaction import redact_message
 from .schemas import TaskCreate, TaskUpdate
+
+
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,9 @@ class TaskRecord:
     new_customer: bool
     payment_method: str
     auto_submit: bool
+    proxy_mode: str
+    proxy_configured: bool
+    effective_proxy_configured: bool
     password_configured: bool
     status: str
     last_stock_status: str | None
@@ -48,6 +55,9 @@ class TaskRecord:
             "new_customer": self.new_customer,
             "payment_method": self.payment_method,
             "auto_submit": self.auto_submit,
+            "proxy_mode": self.proxy_mode,
+            "proxy_configured": self.proxy_configured,
+            "effective_proxy_configured": self.effective_proxy_configured,
             "password_configured": self.password_configured,
             "status": self.status,
             "last_stock_status": self.last_stock_status,
@@ -86,6 +96,14 @@ def decrypt_password(ciphertext: str, key: str) -> str:
     return Fernet(key.encode("ascii")).decrypt(ciphertext.encode("ascii")).decode("utf-8")
 
 
+def encrypt_secret(value: str, key: str) -> str:
+    return Fernet(key.encode("ascii")).encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt_secret(ciphertext: str, key: str) -> str:
+    return Fernet(key.encode("ascii")).decrypt(ciphertext.encode("ascii")).decode("utf-8")
+
+
 class Repository:
     def __init__(self, session_factory: Callable[[], Session], settings: Settings):
         self.session_factory = session_factory
@@ -105,8 +123,21 @@ class Repository:
     def decrypt_password(ciphertext: str, key: str) -> str:
         return decrypt_password(ciphertext, key)
 
-    @staticmethod
-    def _record(task: Task) -> TaskRecord:
+    def _record(self, task: Task, setting: Setting | None = None) -> TaskRecord:
+        if setting is None:
+            with self.session_factory() as session:
+                setting = session.get(Setting, "__global__")
+        proxy_mode = task.proxy_mode or "inherit"
+        effective_proxy_configured = (
+            bool(task.proxy_url_ciphertext)
+            if proxy_mode == "custom"
+            else bool(
+                proxy_mode == "inherit"
+                and setting
+                and setting.proxy_enabled
+                and setting.proxy_url_ciphertext
+            )
+        )
         return TaskRecord(
             id=task.id,
             goods_id=task.goods_id,
@@ -119,11 +150,14 @@ class Repository:
             new_customer=task.new_customer,
             payment_method=task.payment_method,
             auto_submit=task.auto_submit,
+            proxy_mode=proxy_mode,
+            proxy_configured=bool(task.proxy_url_ciphertext),
+            effective_proxy_configured=effective_proxy_configured,
             password_configured=bool(task.password_ciphertext),
             status=task.status,
             last_stock_status=task.last_stock_status,
             last_checked_at=task.last_checked_at,
-            last_error=task.last_error,
+            last_error=redact_message(task.last_error) if task.last_error is not None else None,
             running_before_shutdown=task.running_before_shutdown,
             created_at=task.created_at,
             updated_at=task.updated_at,
@@ -164,6 +198,12 @@ class Repository:
             new_customer=task.new_customer,
             payment_method=task.payment_method,
             auto_submit=True,
+            proxy_mode=task.proxy_mode,
+            proxy_url_ciphertext=(
+                encrypt_secret(task.proxy_url, self._encryption_key)
+                if task.proxy_url is not None
+                else None
+            ),
         )
         with self.session_factory() as session:
             session.add(model)
@@ -188,12 +228,21 @@ class Repository:
                 raise KeyError(task_id)
             values = patch.dict(exclude_unset=True)
             password = values.pop("password", None)
+            proxy_url = values.pop("proxy_url", None)
+            proxy_mode = values.get("proxy_mode")
             for field, value in values.items():
                 if field == "email":
                     value = str(value)
                 setattr(model, field, value)
             if password is not None:
                 model.password_ciphertext = encrypt_password(password, self._encryption_key)
+            if proxy_mode is not None:
+                model.proxy_mode = proxy_mode
+                model.proxy_url_ciphertext = (
+                    encrypt_secret(proxy_url, self._encryption_key)
+                    if proxy_mode == "custom" and proxy_url is not None
+                    else None
+                )
             model.updated_at = utc_now()
             session.commit()
             session.refresh(model)
@@ -582,13 +631,110 @@ class Repository:
                 "task_counts": task_counts,
                 "order_counts": order_counts,
                 "available_count": available_count or 0,
-                "last_error": last_error,
+                "last_error": redact_message(last_error) if last_error is not None else None,
             }
 
     def get_setting(self, key: str) -> str | None:
         with self.session_factory() as session:
             setting = session.get(Setting, key)
             return setting.value_ciphertext if setting else None
+
+    def get_proxy_settings(self) -> dict[str, bool]:
+        with self.session_factory() as session:
+            setting = session.get(Setting, "__global__")
+            return {
+                "proxy_enabled": bool(setting and setting.proxy_enabled),
+                "proxy_configured": bool(setting and setting.proxy_url_ciphertext),
+            }
+
+    def get_global_proxy_settings(self) -> dict[str, bool]:
+        return self.get_proxy_settings()
+
+    def update_proxy_settings(
+        self,
+        *,
+        proxy_enabled: bool | None = None,
+        proxy_url: str | None | object = _UNSET,
+    ) -> None:
+        with self.session_factory() as session:
+            setting = session.get(Setting, "__global__")
+            if setting is None:
+                setting = Setting(key="__global__", proxy_enabled=False)
+                session.add(setting)
+                session.flush()
+            if proxy_enabled is not None:
+                setting.proxy_enabled = proxy_enabled
+                if proxy_enabled is False:
+                    setting.proxy_url_ciphertext = None
+            if proxy_url is not _UNSET and proxy_enabled is not False:
+                if proxy_url is None:
+                    setting.proxy_url_ciphertext = None
+                else:
+                    parse_proxy_url(proxy_url)
+                    setting.proxy_url_ciphertext = encrypt_secret(
+                        proxy_url, self._encryption_key
+                    )
+            setting.updated_at = utc_now()
+            session.commit()
+
+    def set_global_proxy_settings(
+        self, *, proxy_enabled: bool | None = None, proxy_url: str | None | object = _UNSET
+    ) -> None:
+        self.update_proxy_settings(proxy_enabled=proxy_enabled, proxy_url=proxy_url)
+
+    def get_effective_proxy_url(self, task_id: str) -> str | None:
+        with self.session_factory() as session:
+            task = session.get(Task, task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if task.proxy_mode == "direct":
+                return None
+            if task.proxy_mode == "custom":
+                if not task.proxy_url_ciphertext:
+                    return None
+                return decrypt_secret(task.proxy_url_ciphertext, self._encryption_key)
+            setting = session.get(Setting, "__global__")
+            if not setting or not setting.proxy_enabled or not setting.proxy_url_ciphertext:
+                return None
+            return decrypt_secret(setting.proxy_url_ciphertext, self._encryption_key)
+
+    def get_global_proxy(self) -> ProxyConfig | None:
+        with self.session_factory() as session:
+            setting = session.get(Setting, "__global__")
+            if not setting or not setting.proxy_enabled or not setting.proxy_url_ciphertext:
+                return None
+            return parse_proxy_url(
+                decrypt_secret(setting.proxy_url_ciphertext, self._encryption_key)
+            )
+
+    def get_effective_proxy(self, task_id: str) -> ProxyConfig | None:
+        with self.session_factory() as session:
+            task = session.get(Task, task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if task.proxy_mode == "direct":
+                return None
+            if task.proxy_mode == "custom":
+                if not task.proxy_url_ciphertext:
+                    return None
+                return parse_proxy_url(
+                    decrypt_secret(task.proxy_url_ciphertext, self._encryption_key)
+                )
+            setting = session.get(Setting, "__global__")
+            if not setting or not setting.proxy_enabled or not setting.proxy_url_ciphertext:
+                return None
+            return parse_proxy_url(
+                decrypt_secret(setting.proxy_url_ciphertext, self._encryption_key)
+            )
+
+    def get_task_proxy_url(self, task_id: str) -> str | None:
+        with self.session_factory() as session:
+            task = session.get(Task, task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if not task.proxy_url_ciphertext:
+                return None
+            return decrypt_secret(task.proxy_url_ciphertext, self._encryption_key)
 
     def get_telegram_settings(self) -> dict[str, str | None]:
         """Read Telegram configuration from one database snapshot."""
@@ -626,6 +772,38 @@ class Repository:
                 else:
                     setting.value_ciphertext = value
                     setting.updated_at = now
+            session.commit()
+
+    def set_settings_atomic(
+        self,
+        values: dict[str, str],
+        *,
+        proxy_enabled: bool | object = _UNSET,
+        proxy_url_ciphertext: str | None | object = _UNSET,
+    ) -> None:
+        """Persist all API settings in one transaction."""
+        with self.session_factory() as session:
+            now = utc_now()
+            for key, value in values.items():
+                setting = session.get(Setting, key)
+                if setting is None:
+                    session.add(Setting(key=key, value_ciphertext=value, updated_at=now))
+                else:
+                    setting.value_ciphertext = value
+                    setting.updated_at = now
+
+            if proxy_enabled is not _UNSET or proxy_url_ciphertext is not _UNSET:
+                setting = session.get(Setting, "__global__")
+                if setting is None:
+                    setting = Setting(key="__global__", proxy_enabled=False)
+                    session.add(setting)
+            if proxy_enabled is not _UNSET:
+                setting.proxy_enabled = proxy_enabled
+                if proxy_enabled is False:
+                    setting.proxy_url_ciphertext = None
+            if proxy_url_ciphertext is not _UNSET and proxy_enabled is not False:
+                setting.proxy_url_ciphertext = proxy_url_ciphertext
+                setting.updated_at = now
             session.commit()
 
     def get_decrypted_password(self, task_id: str) -> str:

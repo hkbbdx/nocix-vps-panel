@@ -10,11 +10,18 @@ _SENSITIVE_KEY = (
     r"card_expiry|card_exp_month|card_exp_year|expiry|expiration|"
     r"access_token|refresh_token|api_key|client_secret|client_secret_key|"
     r"secret_key|bot_token|session_token|auth_token|private_key|"
+    r"proxy_url(?:_ciphertext)?|"
     r"paypal[\w-]*|session[\w-]*)"
 )
 _KEY_PATTERN = re.compile(
     rf"(?<![\w-])(?P<key_quote>['\"]?)(?P<key>{_SENSITIVE_KEY})"
     rf"(?P=key_quote)(?![\w-])(?P<separator>\s*[:=]\s*)",
+    re.IGNORECASE,
+)
+_PROXY_URL_PATTERN = re.compile(
+    r"(?P<scheme>https?://|socks5://)"
+    r"(?P<userinfo>[^/\s]+@)"
+    r"(?P<host>\[[^\]\s]+\]|[^:/\s@]+):(?P<port>[0-9]{1,5})",
     re.IGNORECASE,
 )
 
@@ -45,7 +52,13 @@ def _value_end(text: str, start: int) -> int:
 
 
 def redact_message(message: Any) -> str:
-    text = str(message)
+    text = _PROXY_URL_PATTERN.sub(
+        lambda match: (
+            f"{match.group('scheme')}"
+            f"{match.group('host')}:{match.group('port')}"
+        ),
+        str(message),
+    )
     output: list[str] = []
     cursor = 0
 

@@ -1,4 +1,9 @@
+import json
+import shutil
+import tempfile
 import time
+import zipfile
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -6,12 +11,12 @@ from loguru import logger
 from selenium import webdriver
 from selenium.common import exceptions
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.proxy import Proxy
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 
+from backend.app.proxy import ProxyConfig
 from nocix_fucker import config
 from nocix_fucker import logic
 from nocix_fucker import types
@@ -31,38 +36,162 @@ def _safe_url(value: str | None) -> str:
         return "[invalid URL]"
 
 
+class ProxyInitializationError(RuntimeError):
+    """Raised when a configured proxy cannot be installed safely."""
+
+
+def proxy_capabilities(proxy: ProxyConfig | None) -> dict[str, Any]:
+    if proxy is None:
+        return {}
+
+    host = f"[{proxy.host}]" if ":" in proxy.host else proxy.host
+    host_port = f"{host}:{proxy.port}"
+    if proxy.scheme == "http":
+        return {
+            "proxyType": "manual",
+            "httpProxy": host_port,
+            "sslProxy": host_port,
+        }
+    if proxy.scheme == "socks5":
+        capabilities = {
+            "proxyType": "manual",
+            "socksProxy": host_port,
+            "socksVersion": 5,
+        }
+        if proxy.username is not None:
+            capabilities["socksUsername"] = proxy.username
+            capabilities["socksPassword"] = proxy.password
+        return capabilities
+    raise ProxyInitializationError("unsupported proxy configuration")
+
+
+def _legacy_proxy_capabilities(proxy: config.ProxyDsn) -> dict[str, Any]:
+    """Keep the environment-configured ProxyDsn contract, including SOCKS4."""
+    return proxy.dict
+
+
+def _proxy_config(proxy: ProxyConfig | config.ProxyDsn) -> ProxyConfig | None:
+    if isinstance(proxy, ProxyConfig):
+        return proxy
+    if str(proxy.scheme) not in {"http", "socks5"}:
+        return None
+    return ProxyConfig(
+        scheme=str(proxy.scheme),
+        host=str(proxy.host),
+        port=int(proxy.port),
+        username=proxy.user,
+        password=proxy.password,
+    )
+
+
+def _create_http_auth_extension(username: str, password: str) -> Path:
+    extension_dir = Path(tempfile.mkdtemp(prefix="nocix-proxy-auth-"))
+    archive_path = extension_dir / "proxy-auth.xpi"
+    manifest = {
+        "manifest_version": 2,
+        "name": "NOCIX proxy authentication",
+        "version": "1.0",
+        "permissions": ["webRequest", "webRequestBlocking", "<all_urls>"],
+        "background": {"scripts": ["background.js"]},
+    }
+    credentials = json.dumps(
+        {"username": username, "password": password}, ensure_ascii=True
+    )
+    background = (
+        "browser.webRequest.onAuthRequired.addListener("
+        "function(details) { return {authCredentials: "
+        + credentials
+        + "}; }, "
+        '{"urls": ["<all_urls>"]}, ["blocking"]);'
+    )
+    try:
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("manifest.json", json.dumps(manifest))
+            archive.writestr("background.js", background)
+    except Exception:
+        shutil.rmtree(extension_dir, ignore_errors=True)
+        raise
+    return extension_dir
+
+
 class Client:
     def __init__(
-        self, remote_browser_dsn: str, proxy_dsn: config.ProxyDsn | None
+        self,
+        remote_browser_dsn: str,
+        proxy_dsn: ProxyConfig | config.ProxyDsn | None,
     ) -> None:
         logger.trace("Connecting to remote browser")
 
         options = webdriver.FirefoxOptions()
+        extension_dir: Path | None = None
+        proxy = _proxy_config(proxy_dsn) if proxy_dsn else None
+        has_proxy = proxy_dsn is not None
 
         if proxy_dsn:
             logger.trace("Proxy detected, configurating")
 
-            proxy = Proxy(proxy_dsn.dict)
-            proxy.add_to_capabilities(options.capabilities)
+            try:
+                capabilities = (
+                    proxy_capabilities(proxy)
+                    if proxy is not None
+                    else _legacy_proxy_capabilities(proxy_dsn)
+                )
+                options.capabilities.update(capabilities)
+                if proxy is not None and proxy.scheme == "http" and proxy.has_credentials:
+                    extension_dir = _create_http_auth_extension(
+                        proxy.username, proxy.password
+                    )
+                    options.add_extension(str(extension_dir / "proxy-auth.xpi"))
+            except Exception as exc:
+                if extension_dir is not None:
+                    shutil.rmtree(extension_dir, ignore_errors=True)
+                if isinstance(exc, ProxyInitializationError):
+                    raise
+                raise ProxyInitializationError(
+                    "HTTP proxy authentication extension could not be installed"
+                    if proxy is not None and proxy.scheme == "http" and proxy.has_credentials
+                    else "proxy configuration could not be installed"
+                ) from None
 
-        driver = webdriver.Remote(command_executor=remote_browser_dsn, options=options)
+        try:
+            driver = webdriver.Remote(command_executor=remote_browser_dsn, options=options)
+        except Exception:
+            if extension_dir is not None:
+                shutil.rmtree(extension_dir, ignore_errors=True)
+            if has_proxy:
+                raise ProxyInitializationError("proxy browser initialization failed") from None
+            raise
         try:
             driver.maximize_window()
             wait = WebDriverWait(driver, 10, 5)
-        except Exception:
+        except Exception as exc:
             try:
                 driver.quit()
             except Exception:
-                logger.exception("Failed to clean up browser after setup failure")
-            raise
+                logger.warning("Failed to clean up browser after setup failure")
+            if extension_dir is not None:
+                shutil.rmtree(extension_dir, ignore_errors=True)
+            if has_proxy:
+                raise ProxyInitializationError("proxy browser initialization failed") from None
+            raise exc
 
         self._driver = driver
         self._wait = wait
+        self._proxy_extension_dir = extension_dir
         self.last_price_text: str | None = None
 
     def close(self) -> None:
         logger.trace("Closing windows and disconnecting from remote browser")
-        self._driver.quit()
+        try:
+            self._driver.quit()
+        finally:
+            extension_dir = getattr(self, "_proxy_extension_dir", None)
+            if extension_dir is not None:
+                shutil.rmtree(extension_dir, ignore_errors=True)
+                self._proxy_extension_dir = None
+
+    def test_connection(self, url: str) -> None:
+        self._driver.get(url)
 
     @property
     def current_url(self) -> str:

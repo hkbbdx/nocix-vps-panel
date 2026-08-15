@@ -109,11 +109,17 @@ export const api = {
   },
   settings: {
     get: () => request<import("./types").RuntimeSettings>("/api/settings"),
-    update: (input: { telegram_enabled?: boolean; telegram_bot_token?: string; telegram_chat_id?: string }) =>
+    update: (input: import("./types").SettingsUpdate) =>
       request<import("./types").RuntimeSettings>("/api/settings", {
         method: "PUT",
         body: JSON.stringify(input),
       }),
     testTelegram: () => request<{ success: boolean; message: string }>("/api/telegram/test", { method: "POST" }),
+  },
+  proxy: {
+    test: (proxyUrl?: string) => request<import("./types").ProxyTestResult>("/api/proxy/test", {
+      method: "POST",
+      ...(proxyUrl ? { body: JSON.stringify({ proxy_url: proxyUrl }) } : {}),
+    }),
   },
 };

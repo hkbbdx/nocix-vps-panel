@@ -13,7 +13,7 @@ from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
 from .manager import TaskManager
 from .repositories import Repository
-from .routers import logs, orders, settings as settings_router, stats, tasks
+from .routers import logs, orders, proxy, settings as settings_router, stats, tasks
 from .telegram import TelegramNotifier
 from .worker import CheckoutWorker
 
@@ -39,7 +39,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             def worker_factory(task, stop_event, pause_event):
                 return CheckoutWorker(
                     task,
-                    client_factory=lambda: Client(runtime_settings.browser_dsn, None),
+                    client_factory=lambda: Client(
+                        runtime_settings.browser_dsn,
+                        repository.get_effective_proxy(task.id),
+                    ),
                     repository=repository,
                     stop_event=stop_event,
                     pause_event=pause_event,
@@ -87,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(settings_router.router)
     app.include_router(settings_router.telegram_router)
     app.include_router(stats.router)
+    app.include_router(proxy.router)
 
     assets_dir = STATIC_DIR / "assets"
     if assets_dir.is_dir():

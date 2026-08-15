@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
-import type { Task, TaskInput } from "../lib/types";
+import type { ProxyMode, Task, TaskInput } from "../lib/types";
+import { isValidProxyUrl } from "../lib/proxy";
 import { useTranslation } from "../i18n";
 
 interface TaskFormProps {
@@ -18,6 +19,10 @@ export function TaskForm({ task, onSubmit, onCancel, busy = false }: TaskFormPro
   const [password, setPassword] = useState("");
   const [stockUrl, setStockUrl] = useState(task?.stock_url ?? "");
   const [cartUrl, setCartUrl] = useState(task?.cart_url ?? "");
+  const [proxyMode, setProxyMode] = useState<ProxyMode>(task?.proxy_mode ?? "inherit");
+  const [proxyConfigured] = useState(task?.proxy_configured ?? false);
+  const [proxyChanged, setProxyChanged] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState("");
   const [error, setError] = useState("");
   const { t } = useTranslation();
 
@@ -46,8 +51,11 @@ export function TaskForm({ task, onSubmit, onCancel, busy = false }: TaskFormPro
     if (task && !task.password_configured && !password) return setError(t("task.passwordRequired"));
     if (!validNocixUrl(stockUrl)) return setError(t("task.stockUrlInvalid"));
     if (!validNocixUrl(cartUrl)) return setError(t("task.cartUrlInvalid"));
+    const proxyModeChanged = !task || proxyMode !== task.proxy_mode;
+    if (proxyMode === "custom" && (!task || !proxyConfigured || proxyChanged || proxyModeChanged) && !isValidProxyUrl(proxyUrl)) return setError(t("task.proxyUrlInvalid"));
     const derivedStockUrl = `https://nocix.net/out-of-stock/?id=${goodsId}`;
     const derivedCartUrl = `https://nocix.net/cart/?id=${goodsId}`;
+    const shouldSendProxy = proxyModeChanged || proxyChanged;
     const input = {
       goods_id: goodsId,
       target_price: price,
@@ -60,6 +68,8 @@ export function TaskForm({ task, onSubmit, onCancel, busy = false }: TaskFormPro
       new_customer: false as const,
       payment_method: "paypal" as const,
       auto_submit: true as const,
+      ...(shouldSendProxy ? { proxy_mode: proxyMode } : {}),
+      ...(shouldSendProxy && proxyMode === "custom" ? { proxy_url: proxyUrl } : {}),
     };
     await onSubmit(input);
   };
@@ -81,7 +91,9 @@ export function TaskForm({ task, onSubmit, onCancel, busy = false }: TaskFormPro
         <label>{t("task.email")}<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
         <label>{t("task.password")}<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required={!task || !task.password_configured} placeholder={task?.password_configured ? t("task.leaveUnchanged") : undefined} /></label>
         <label className="wide">{t("task.stockUrl")} <span className="muted">{t("task.optional")}</span><input type="url" value={stockUrl} onChange={(event) => setStockUrl(event.target.value)} placeholder={t("task.derivedStock")} /></label>
-        <label className="wide">{t("task.cartUrl")} <span className="muted">{t("task.optional")}</span><input type="url" value={cartUrl} onChange={(event) => setCartUrl(event.target.value)} placeholder={t("task.derivedCart")} /></label>
+         <label className="wide">{t("task.cartUrl")} <span className="muted">{t("task.optional")}</span><input type="url" value={cartUrl} onChange={(event) => setCartUrl(event.target.value)} placeholder={t("task.derivedCart")} /></label>
+          <label>{t("task.proxyMode")}<select value={proxyMode} onChange={(event) => { const nextMode = event.target.value as ProxyMode; setProxyMode(nextMode); setError(""); if (nextMode !== "custom") { setProxyUrl(""); setProxyChanged(false); } }}><option value="inherit">{t("task.proxyInherit")}</option><option value="custom">{t("task.proxyCustom")}</option><option value="direct">{t("task.proxyDirect")}</option></select></label>
+          {proxyMode === "custom" && <label>{t("task.customProxyUrl")}<input type="password" autoComplete="off" value={proxyUrl} onChange={(event) => { setProxyUrl(event.target.value); setProxyChanged(true); }} placeholder={t("task.proxyFormat")} /></label>}
       </div>
       <div className="payment-lock" role="note">
         <span className="payment-mark">P</span>

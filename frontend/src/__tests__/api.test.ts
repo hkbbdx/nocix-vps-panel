@@ -45,4 +45,49 @@ describe("API client", () => {
     expect(error).toMatchObject({ messageKey: "api.invalidResponse" });
     expect(error.message).toBe("");
   });
+
+  it("sends proxy settings and proxy tests to the protected endpoints without changing the secret", async () => {
+    setApiKey("proxy-session-key");
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        proxy_enabled: true,
+        proxy_configured: true,
+        proxy_display: "http://proxy.example.com:8080",
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        success: true,
+        proxy: "http://proxy.example.com:8080",
+        message: "Proxy connection successful.",
+      }), { status: 200 }));
+
+    await api.settings.update({ proxy_enabled: true, proxy_url: "http://proxy-user:proxy-secret@proxy.example.com:8080" });
+    const testResult = await api.proxy.test();
+
+    expect(fetchSpy.mock.calls[0][0]).toBe("/api/settings");
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toEqual({
+      proxy_enabled: true,
+      proxy_url: "http://proxy-user:proxy-secret@proxy.example.com:8080",
+    });
+    expect(fetchSpy.mock.calls[1][0]).toBe("/api/proxy/test");
+    expect(fetchSpy.mock.calls[1][1]?.method).toBe("POST");
+    expect((fetchSpy.mock.calls[0][1]?.headers as Headers).get("X-API-Key")).toBe("proxy-session-key");
+    expect((fetchSpy.mock.calls[1][1]?.headers as Headers).get("X-API-Key")).toBe("proxy-session-key");
+    expect(testResult.proxy).toBe("http://proxy.example.com:8080");
+  });
+
+  it("sends an optional draft proxy URL in the test request body", async () => {
+    setApiKey("proxy-session-key");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      proxy: "socks5://proxy.example.com:1080",
+      message: "Proxy connection successful.",
+    }), { status: 200 }));
+
+    await api.proxy.test("socks5://draft-user:draft-pass@proxy.example.com:1080");
+
+    expect(fetchSpy).toHaveBeenCalledWith("/api/proxy/test", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ proxy_url: "socks5://draft-user:draft-pass@proxy.example.com:1080" }),
+    }));
+  });
 });

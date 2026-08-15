@@ -1,9 +1,12 @@
 import math
+import re
 from datetime import datetime
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, EmailStr, Field, root_validator, validator
+
+from .proxy import parse_proxy_url
 
 
 def _validate_http_url(value: Optional[str]) -> Optional[str]:
@@ -56,6 +59,8 @@ class TaskCreate(_TaskConstraints):
     email: EmailStr
     password: str = Field(..., min_length=1)
     auto_submit: Literal[True] = True
+    proxy_mode: Literal["inherit", "custom", "direct"] = "inherit"
+    proxy_url: Optional[str] = None
 
     _stock_url_is_http = validator("stock_url", allow_reuse=True)(_validate_http_url)
     _cart_url_is_http = validator("cart_url", allow_reuse=True)(_validate_http_url)
@@ -65,6 +70,12 @@ class TaskCreate(_TaskConstraints):
     _wait_interval_is_finite = validator("wait_interval", allow_reuse=True)(
         _validate_finite
     )
+
+    @validator("proxy_url")
+    def validate_proxy_url(cls, value):
+        if value is not None:
+            parse_proxy_url(value)
+        return value
 
     @root_validator
     def apply_url_defaults(cls, values):
@@ -78,6 +89,16 @@ class TaskCreate(_TaskConstraints):
                 values["cart_url"] = f"https://nocix.net/cart/?id={goods_id}"
         return values
 
+    @root_validator
+    def validate_proxy_fields(cls, values):
+        mode = values.get("proxy_mode", "inherit")
+        proxy_url = values.get("proxy_url")
+        if mode == "custom" and proxy_url is None:
+            raise ValueError("custom proxy mode requires a proxy URL")
+        if mode != "custom" and proxy_url is not None:
+            raise ValueError("proxy URL is only allowed in custom proxy mode")
+        return values
+
 
 class TaskUpdate(_TaskConstraints):
     goods_id: Optional[str] = Field(default=None, min_length=1, regex=r"^[0-9]+$")
@@ -89,6 +110,8 @@ class TaskUpdate(_TaskConstraints):
     email: Optional[EmailStr] = None
     password: Optional[str] = Field(default=None, min_length=1)
     auto_submit: Optional[Literal[True]] = None
+    proxy_mode: Optional[Literal["inherit", "custom", "direct"]] = None
+    proxy_url: Optional[str] = None
 
     _stock_url_is_http = validator("stock_url", allow_reuse=True)(_validate_http_url)
     _cart_url_is_http = validator("cart_url", allow_reuse=True)(_validate_http_url)
@@ -99,11 +122,29 @@ class TaskUpdate(_TaskConstraints):
         _validate_finite
     )
 
+    @validator("proxy_url")
+    def validate_proxy_url(cls, value):
+        if value is not None:
+            parse_proxy_url(value)
+        return value
+
     @validator("stock_url", "cart_url", pre=True)
     def reject_null_urls(cls, value):
         if value is None:
             raise ValueError("URL cannot be null when updating a task")
         return value
+
+    @root_validator
+    def validate_proxy_fields(cls, values):
+        mode = values.get("proxy_mode")
+        proxy_url = values.get("proxy_url")
+        if mode == "custom" and proxy_url is None:
+            raise ValueError("custom proxy mode requires a proxy URL")
+        if mode in {"inherit", "direct"} and proxy_url is not None:
+            raise ValueError("proxy URL is only allowed in custom proxy mode")
+        if mode is None and proxy_url is not None:
+            raise ValueError("proxy mode is required with a proxy URL")
+        return values
 
 
 class TaskResponse(BaseModel):
@@ -118,6 +159,9 @@ class TaskResponse(BaseModel):
     new_customer: Literal[False] = False
     payment_method: Literal["paypal"] = "paypal"
     auto_submit: Literal[True] = True
+    proxy_mode: Literal["inherit", "custom", "direct"] = "inherit"
+    proxy_configured: bool = False
+    effective_proxy_configured: bool = False
     password_configured: bool
     status: str = "stopped"
     last_stock_status: Optional[str] = None
@@ -138,6 +182,28 @@ class TaskResponse(BaseModel):
 class SettingsUpdate(BaseModel):
     log_level: Optional[Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]] = None
     telegram_enabled: Optional[bool] = None
+    telegram_bot_token: Optional[str] = Field(default=None, min_length=26, max_length=256)
+    telegram_chat_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    proxy_enabled: Optional[bool] = None
+    proxy_url: Optional[str] = None
+
+    @validator("telegram_bot_token")
+    def validate_telegram_bot_token(cls, value):
+        if value is not None and not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{20,}", value):
+            raise ValueError("invalid Telegram bot token format")
+        return value
+
+    @validator("telegram_chat_id")
+    def validate_telegram_chat_id(cls, value):
+        if value is not None and not re.fullmatch(r"-?\d{1,20}", value):
+            raise ValueError("Telegram chat ID must be numeric")
+        return value
+
+    @validator("proxy_url")
+    def validate_proxy_url(cls, value):
+        if value is not None:
+            parse_proxy_url(value)
+        return value
 
     class Config:
         extra = "forbid"

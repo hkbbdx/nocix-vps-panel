@@ -26,6 +26,10 @@ class Task(Base):
     new_customer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     payment_method: Mapped[str] = mapped_column(String(32), nullable=False, default="paypal")
     auto_submit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    proxy_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="inherit", server_default="inherit"
+    )
+    proxy_url_ciphertext: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="stopped", server_default="stopped")
     last_stock_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -65,4 +69,8 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
     value_ciphertext: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    proxy_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    proxy_url_ciphertext: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)

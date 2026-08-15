@@ -59,9 +59,11 @@ class SingleCheckWorker:
                 self.task.id, "available" if available else "out_of_stock"
             )
         except Exception as exc:
-            self.repository.set_task_status(
-                self.task.id, "failed", error=redact_message(str(exc))
-            )
+            safe_error = redact_message(str(exc))
+            self.repository.set_task_status(self.task.id, "failed", error=safe_error)
+            append_log = getattr(self.repository, "append_log", None)
+            if callable(append_log):
+                append_log("ERROR", self.task.id, safe_error)
         finally:
             if client is not None:
                 try:
@@ -95,7 +97,9 @@ class TaskManager:
     def _default_worker_factory(self, task, stop_event, pause_event):
         from nocix_fucker.client import Client
 
-        client_factory = lambda: Client(self.settings.browser_dsn, None)
+        client_factory = lambda: Client(
+            self.settings.browser_dsn, self.repository.get_effective_proxy(task.id)
+        )
         return CheckoutWorker(
             task,
             client_factory=client_factory,
@@ -110,7 +114,9 @@ class TaskManager:
 
         return SingleCheckWorker(
             task,
-            client_factory=lambda: Client(self.settings.browser_dsn, None),
+            client_factory=lambda: Client(
+                self.settings.browser_dsn, self.repository.get_effective_proxy(task.id)
+            ),
             repository=self.repository,
             stop_event=stop_event,
             pause_event=pause_event,

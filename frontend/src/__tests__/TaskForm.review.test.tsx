@@ -29,7 +29,7 @@ describe("TaskForm review behavior", () => {
     render(<I18nProvider initialLanguage="en-US"><TaskForm task={{
       id: "task-1", goods_id: "418", stock_url: "https://nocix.net/out-of-stock/?id=418", cart_url: "https://nocix.net/cart/?id=418",
       target_price: 10, wait_interval: 5, operating_system: "debian", email: "buyer@example.com", new_customer: false,
-      payment_method: "paypal", auto_submit: true, password_configured: true, status: "stopped", last_stock_status: null,
+      payment_method: "paypal", auto_submit: true, proxy_mode: "inherit", proxy_configured: false, effective_proxy_configured: false, password_configured: true, status: "stopped", last_stock_status: null,
       last_checked_at: null, last_error: null,
     }} onSubmit={onSubmit} onCancel={vi.fn()} /></I18nProvider>);
 
@@ -43,6 +43,47 @@ describe("TaskForm review behavior", () => {
       cart_url: "https://nocix.net/cart/?id=418",
     }));
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("password");
+  });
+
+  it("saves changes to an existing custom proxy task without re-entering its URL", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<I18nProvider initialLanguage="en-US"><TaskForm task={{
+      id: "task-1", goods_id: "418", stock_url: "https://nocix.net/out-of-stock/?id=418", cart_url: "https://nocix.net/cart/?id=418",
+      target_price: 10, wait_interval: 5, operating_system: "debian", email: "buyer@example.com", new_customer: false,
+      payment_method: "paypal", auto_submit: true, proxy_mode: "custom", proxy_configured: true, effective_proxy_configured: true, password_configured: true, status: "stopped", last_stock_status: null,
+      last_checked_at: null, last_error: null,
+    }} onSubmit={onSubmit} onCancel={vi.fn()} /></I18nProvider>);
+
+    const proxyUrl = screen.getByLabelText(/custom proxy url/i);
+    expect(proxyUrl).toHaveValue("");
+    await user.clear(screen.getByLabelText(/target price/i));
+    await user.type(screen.getByLabelText(/target price/i), "12");
+    await user.clear(screen.getByLabelText(/check interval/i));
+    await user.type(screen.getByLabelText(/check interval/i), "10");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ target_price: 12, wait_interval: 10 }));
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("proxy_url");
+  });
+
+  it("clears an existing custom proxy when the mode changes to direct", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<I18nProvider initialLanguage="en-US"><TaskForm task={{
+      id: "task-1", goods_id: "418", stock_url: "https://nocix.net/out-of-stock/?id=418", cart_url: "https://nocix.net/cart/?id=418",
+      target_price: 10, wait_interval: 5, operating_system: "debian", email: "buyer@example.com", new_customer: false,
+      payment_method: "paypal", auto_submit: true, proxy_mode: "custom", proxy_configured: true, effective_proxy_configured: true, password_configured: true, status: "stopped", last_stock_status: null,
+      last_checked_at: null, last_error: null,
+    }} onSubmit={onSubmit} onCancel={vi.fn()} /></I18nProvider>);
+
+    await user.selectOptions(screen.getByLabelText(/proxy mode/i), "direct");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ proxy_mode: "direct" }));
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("proxy_url");
   });
 
   it.each([

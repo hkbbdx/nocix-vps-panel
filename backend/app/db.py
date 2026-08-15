@@ -52,6 +52,8 @@ def init_db(engine: Engine) -> None:
             "last_checked_at": "DATETIME",
             "last_error": "TEXT",
             "running_before_shutdown": "BOOLEAN NOT NULL DEFAULT 0",
+            "proxy_mode": "VARCHAR(16) NOT NULL DEFAULT 'inherit'",
+            "proxy_url_ciphertext": "TEXT",
         },
         "orders": {
             "observed_price": "VARCHAR(128)",
@@ -59,7 +61,11 @@ def init_db(engine: Engine) -> None:
             "created_at": "DATETIME",
         },
         "logs": {"created_at": "DATETIME"},
-        "settings": {"updated_at": "DATETIME"},
+        "settings": {
+            "updated_at": "DATETIME",
+            "proxy_enabled": "BOOLEAN NOT NULL DEFAULT 0",
+            "proxy_url_ciphertext": "TEXT",
+        },
     }
     with engine.begin() as connection:
         connection.execute(
@@ -82,6 +88,9 @@ def init_db(engine: Engine) -> None:
                         text(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}')
                     )
         connection.execute(text("UPDATE tasks SET auto_submit = 1 WHERE auto_submit != 1"))
+        connection.execute(
+            text("UPDATE tasks SET proxy_mode = 'inherit' WHERE proxy_mode IS NULL")
+        )
         connection.execute(text("UPDATE schema_version SET version = 1"))
 
 

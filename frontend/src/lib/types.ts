@@ -9,6 +9,8 @@ export type TaskStatus =
   | "unknown"
   | "submitted_pending_confirmation";
 
+export type ProxyMode = "inherit" | "custom" | "direct";
+
 export interface Task {
   id: string;
   goods_id: string;
@@ -21,6 +23,9 @@ export interface Task {
   new_customer: false;
   payment_method: "paypal";
   auto_submit: boolean;
+  proxy_mode: ProxyMode;
+  proxy_configured: boolean;
+  effective_proxy_configured: boolean;
   password_configured: boolean;
   status: TaskStatus;
   last_stock_status: string | null;
@@ -40,6 +45,8 @@ export interface TaskInput {
   new_customer: false;
   payment_method: "paypal";
   auto_submit: true;
+  proxy_mode: ProxyMode;
+  proxy_url?: string | null;
 }
 
 export interface Order {
@@ -80,6 +87,24 @@ export interface RuntimeSettings {
   telegram_enabled: boolean;
   telegram_configured: boolean;
   log_level: string;
+  proxy_enabled: boolean;
+  proxy_configured: boolean;
+  proxy_display?: string;
+}
+
+export interface SettingsUpdate {
+  log_level?: string;
+  telegram_enabled?: boolean;
+  telegram_bot_token?: string;
+  telegram_chat_id?: string;
+  proxy_enabled?: boolean;
+  proxy_url?: string | null;
+}
+
+export interface ProxyTestResult {
+  success: boolean;
+  proxy: "direct" | string;
+  message: string;
 }
 
 export interface TaskHistoryEntry extends Order {
