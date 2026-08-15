@@ -18,6 +18,7 @@ export function Layout({ children }: { children: ReactNode }) {
     { to: "/tasks", label: t("nav.tasks"), icon: "▦" },
     { to: "/orders", label: t("nav.orders"), icon: "↗" },
     { to: "/logs", label: t("nav.logs"), icon: "≡" },
+    { to: "/updates", label: t("nav.updates"), icon: "↟" },
     { to: "/settings", label: t("nav.settings"), icon: "⚙" },
   ];
 

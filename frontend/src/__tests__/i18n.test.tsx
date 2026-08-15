@@ -49,6 +49,16 @@ describe("bilingual panel", () => {
     expect(screen.getByTestId("message")).toHaveTextContent("3 tasks");
   });
 
+  it("provides bilingual update page labels", () => {
+    function UpdatesLabelsProbe() {
+      const { t } = useTranslation();
+      return <span>{t("updates.eyebrow")}|{t("updates.title")}|{t("updates.subtitle")}|{t("updates.recent")}|{t("updates.viewAll")}|{t("updates.date")}|{t("updates.type.feat")}</span>;
+    }
+
+    renderWithI18n(<UpdatesLabelsProbe />);
+    expect(screen.getByText(/版本记录\|更新日志\|/)).toBeInTheDocument();
+  });
+
   it("updates document language and title when the selected language changes", () => {
     renderWithI18n(<Probe />);
 
