@@ -1,16 +1,18 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useTaskHistory } from "../hooks/use-tasks";
+import { useLoginState, useTaskHistory } from "../hooks/use-tasks";
 import { TaskCard } from "../components/TaskCard";
 import { I18nProvider } from "../i18n";
+import { ApiError } from "../lib/api";
 
 vi.mock("../hooks/use-tasks", async () => {
   const actual = await vi.importActual<typeof import("../hooks/use-tasks")>("../hooks/use-tasks");
-  return { ...actual, useTaskHistory: vi.fn() };
+  return { ...actual, useTaskHistory: vi.fn(), useLoginState: vi.fn() };
 });
 
 const mockedUseTaskHistory = vi.mocked(useTaskHistory);
+const mockedUseLoginState = vi.mocked(useLoginState);
 
 const task = {
   id: "task-1", goods_id: "418", stock_url: "https://nocix.net/out-of-stock/?id=418", cart_url: "https://nocix.net/cart/?id=418",
@@ -20,7 +22,10 @@ const task = {
 };
 
 describe("TaskCard operation locking", () => {
-  beforeEach(() => localStorage.setItem("nocix-language", "en-US"));
+  beforeEach(() => {
+    localStorage.setItem("nocix-language", "en-US");
+    mockedUseLoginState.mockReturnValue({ data: undefined, isLoading: false, error: null } as ReturnType<typeof useLoginState>);
+  });
   it("disables edit, delete, and history while a mutation is pending", () => {
     render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={task} busy onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
     expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
@@ -111,5 +116,80 @@ describe("TaskCard operation locking", () => {
 
     expect(screen.getByText("Configured")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("proxy.example");
+  });
+
+  it("locks normal actions while waiting for an email code and exposes safe login controls", () => {
+    mockedUseLoginState.mockReturnValue({
+      data: { task_id: "task-1", status: "waiting_for_email_code", waiting: true, attempts: 2, remaining_seconds: 87, last_error: "invalid verification code" },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useLoginState>);
+    render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status: "waiting_for_email_code" }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/waiting for email verification code/i);
+    expect(screen.getByText(/2 attempts/i)).toBeInTheDocument();
+    expect(screen.getByText(/87 seconds remaining/i)).toBeInTheDocument();
+    expect(screen.getByText("invalid verification code")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /enter verification code/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cancel login/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /start monitor|pause|resume|check now|edit|delete|stop/i })).not.toBeInTheDocument();
+  });
+
+  it.each(["login_first", "login_second"] as const)(
+    "keeps pause and stop available during %s while locking edit, delete, and check",
+    (status) => {
+      const onAction = vi.fn();
+      render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status }} onAction={onAction} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
+
+      expect(screen.getByRole("button", { name: /pause/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /stop/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /check now/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^delete$/i })).not.toBeInTheDocument();
+    },
+  );
+
+  it("removes the code dialog when live login state becomes terminal", async () => {
+    mockedUseLoginState.mockReturnValue({
+      data: { task_id: "task-1", status: "waiting_for_email_code", waiting: true, attempts: 1, remaining_seconds: 60, last_error: null },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useLoginState>);
+    const view = render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status: "waiting_for_email_code" }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: /enter verification code/i }));
+    expect(screen.getByRole("dialog", { name: /enter email verification code/i })).toBeInTheDocument();
+
+    mockedUseLoginState.mockReturnValue({
+      data: { task_id: "task-1", status: "failed", waiting: false, attempts: 1, remaining_seconds: 0, last_error: "verification timed out" },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useLoginState>);
+    view.rerender(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status: "waiting_for_email_code" }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /enter email verification code/i })).not.toBeInTheDocument());
+    expect(screen.getByText("verification timed out")).toBeInTheDocument();
+  });
+
+  it("removes waiting UI immediately when a 409 arrives with retained waiting data", async () => {
+    mockedUseLoginState.mockReturnValue({
+      data: { task_id: "task-1", status: "waiting_for_email_code", waiting: true, attempts: 1, remaining_seconds: 60, last_error: null },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useLoginState>);
+    const view = render(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status: "waiting_for_email_code" }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: /enter verification code/i }));
+    expect(screen.getByRole("dialog", { name: /enter email verification code/i })).toBeInTheDocument();
+
+    mockedUseLoginState.mockReturnValue({
+      data: { task_id: "task-1", status: "waiting_for_email_code", waiting: true, attempts: 1, remaining_seconds: 60, last_error: null },
+      isLoading: false,
+      error: new ApiError(409, "Login verification is not available"),
+    } as unknown as ReturnType<typeof useLoginState>);
+    view.rerender(<QueryClientProvider client={new QueryClient()}><I18nProvider initialLanguage="en-US"><TaskCard task={{ ...task, status: "waiting_for_email_code" }} onAction={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} /></I18nProvider></QueryClientProvider>);
+
+    expect(screen.queryByRole("dialog", { name: /enter email verification code/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enter verification code|cancel login/i })).not.toBeInTheDocument();
   });
 });

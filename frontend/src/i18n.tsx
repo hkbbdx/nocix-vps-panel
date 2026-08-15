@@ -236,6 +236,32 @@ const translations: Record<Language, Record<string, string>> = {
     "status.failed": "失败",
     "status.unknown": "未知",
     "status.pending": "等待确认",
+    "status.loginFirst": "登录第一阶段",
+    "status.loginSecond": "登录第二阶段",
+    "status.waitingForEmailCode": "等待邮箱验证码",
+    "login.eyebrow": "登录验证",
+    "login.title": "输入邮箱验证码",
+    "login.description": "验证码仅保留在当前对话框内，不会保存到浏览器。",
+    "login.codeLabel": "邮箱验证码",
+    "login.codeValidation": "请输入 4-12 位 ASCII 数字。",
+    "login.submit": "提交验证码",
+    "login.submitting": "提交中…",
+    "login.cancel": "取消",
+    "login.close": "关闭验证码对话框",
+    "login.enterCode": "输入验证码",
+    "login.cancelLogin": "取消登录",
+    "login.waiting": "等待邮箱验证码。",
+    "login.attempts": "已尝试 {count} 次",
+    "login.remaining": "剩余 {seconds} 秒",
+    "login.progressFirst": "正在进行登录第一阶段。",
+    "login.progressSecond": "正在进行登录第二阶段。",
+    "login.submitFailed": "验证码提交失败。",
+    "login.cancelFailed": "取消登录失败。",
+    "login.stateFailed": "无法读取登录验证状态。",
+    "login.accepted": "验证码已接受。",
+    "login.rejected": "验证码被拒绝。",
+    "login.cancelled": "登录已取消。",
+    "login.timeout": "验证码已超时。",
   },
   "en-US": {},
 };
@@ -265,6 +291,32 @@ translations["en-US"]["task.proxyDirect"] = "Direct connection";
 translations["en-US"]["task.customProxyUrl"] = "Custom proxy URL";
 translations["en-US"]["task.proxyFormat"] = "http://host:port or socks5://user:password@host:port";
 translations["en-US"]["task.proxyUrlInvalid"] = "Proxy URL must use http:// or socks5:// with a valid host and port, without a query or fragment.";
+translations["en-US"]["status.loginFirst"] = "Login stage one";
+translations["en-US"]["status.loginSecond"] = "Login stage two";
+translations["en-US"]["status.waitingForEmailCode"] = "Waiting for email verification code";
+translations["en-US"]["login.eyebrow"] = "Login verification";
+translations["en-US"]["login.title"] = "Enter email verification code";
+translations["en-US"]["login.description"] = "The code stays in this dialog and is never stored in the browser.";
+translations["en-US"]["login.codeLabel"] = "Email verification code";
+translations["en-US"]["login.codeValidation"] = "Enter 4-12 ASCII digits.";
+translations["en-US"]["login.submit"] = "Submit code";
+translations["en-US"]["login.submitting"] = "Submitting…";
+translations["en-US"]["login.cancel"] = "Cancel";
+translations["en-US"]["login.close"] = "Close verification dialog";
+translations["en-US"]["login.enterCode"] = "Enter verification code";
+translations["en-US"]["login.cancelLogin"] = "Cancel login";
+translations["en-US"]["login.waiting"] = "Waiting for email verification code.";
+translations["en-US"]["login.attempts"] = "{count} attempts";
+translations["en-US"]["login.remaining"] = "{seconds} seconds remaining";
+translations["en-US"]["login.progressFirst"] = "Login stage one is in progress.";
+translations["en-US"]["login.progressSecond"] = "Login stage two is in progress.";
+translations["en-US"]["login.submitFailed"] = "Code submission failed.";
+translations["en-US"]["login.cancelFailed"] = "Login cancellation failed.";
+translations["en-US"]["login.stateFailed"] = "Could not read login verification state.";
+translations["en-US"]["login.accepted"] = "Code accepted.";
+translations["en-US"]["login.rejected"] = "Code rejected.";
+translations["en-US"]["login.cancelled"] = "Login cancelled.";
+translations["en-US"]["login.timeout"] = "The verification code timed out.";
 
 function readLanguage(): Language {
   try {

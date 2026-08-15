@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 import threading
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -74,7 +75,14 @@ class SingleCheckWorker:
 
 class TaskManager:
     INDETERMINATE_STATUSES = {"unknown", "submitted_pending_confirmation"}
-    ACTIVE_STATUSES = {"running", "checking", "ordering"}
+    ACTIVE_STATUSES = {
+        "running",
+        "checking",
+        "ordering",
+        "login_first",
+        "login_second",
+        "waiting_for_email_code",
+    }
 
     def __init__(
         self,
@@ -159,6 +167,9 @@ class TaskManager:
                                     "running",
                                     "checking",
                                     "ordering",
+                                    "login_first",
+                                    "login_second",
+                                    "waiting_for_email_code",
                                 }:
                                     self.repository.set_task_lifecycle(
                                         task_id,
@@ -228,12 +239,15 @@ class TaskManager:
                 if task.status == "paused":
                     return {"status": "paused"}
                 raise RuntimeError("task is not running")
-            if task.status not in {"running", "checking", "ordering"}:
+            if task.status not in self.ACTIVE_STATUSES:
                 raise RuntimeError(f"task cannot pause from {task.status}")
             self.repository.pause_task(
                 task_id, expected_marker=task.running_before_shutdown
             )
             handle.pause_event.set()
+            wake = getattr(handle.worker, "wake_verification", None)
+            if callable(wake):
+                wake()
             worker_task = handle.worker_task
             handle.preserve_restart_marker = False
             handle.stopping = True
@@ -263,6 +277,9 @@ class TaskManager:
             self.repository.stop_task(task_id)
             if handle is not None:
                 handle.stop_event.set()
+                wake = getattr(handle.worker, "wake_verification", None)
+                if callable(wake):
+                    wake()
                 worker_task = handle.worker_task
                 handle.preserve_restart_marker = False
                 handle.stopping = True
@@ -281,6 +298,9 @@ class TaskManager:
                 self.repository.delete_task(task_id)
                 return
             handle.stop_event.set()
+            wake = getattr(handle.worker, "wake_verification", None)
+            if callable(wake):
+                wake()
             handle.preserve_restart_marker = False
             handle.stopping = True
             if task.status not in self.INDETERMINATE_STATUSES:
@@ -351,6 +371,46 @@ class TaskManager:
         """Return active or retained worker handles, including non-cooperative threads."""
         return len(self._workers)
 
+    def _owned_login_worker(self, task_id: str) -> Any:
+        if self.repository.get_task(task_id) is None:
+            raise KeyError(task_id)
+        handle = self._workers.get(task_id)
+        if handle is None or handle.worker_task.done():
+            raise RuntimeError("task is not owned by an active worker")
+        worker = handle.worker
+        if not callable(getattr(worker, "get_login_state", None)):
+            raise RuntimeError("task has no login verification state")
+        return worker
+
+    def get_login_state(self, task_id: str) -> dict:
+        return self._owned_login_worker(task_id).get_login_state()
+
+    def submit_email_code(self, task_id: str, code: str) -> dict:
+        if not isinstance(code, str) or re.fullmatch(r"[0-9]{4,12}", code) is None:
+            state = self.get_login_state(task_id)
+            return {
+                "accepted": False,
+                "status": state["status"],
+                "message": "invalid verification code",
+            }
+        return self._owned_login_worker(task_id).submit_email_code(code)
+
+    def cancel_login(self, task_id: str) -> dict:
+        worker = self._owned_login_worker(task_id)
+        cancelled = worker.cancel_verification()
+        state = worker.get_login_state()
+        if not cancelled:
+            return {
+                "accepted": False,
+                "status": state["status"],
+                "message": "login verification is not waiting",
+            }
+        return {
+            "accepted": True,
+            "status": state["status"],
+            "message": "verification cancelled",
+        }
+
     async def shutdown(self) -> None:
         async with self._lock:
             if self._shutdown:
@@ -366,7 +426,7 @@ class TaskManager:
                 if current is None:
                     continue
                 is_terminal = current.status in {"success", "failed"}
-                is_active = current.status in {"running", "checking", "ordering"}
+                is_active = current.status in self.ACTIVE_STATUSES
                 should_restart = (
                     is_active
                     and
@@ -375,6 +435,9 @@ class TaskManager:
                     and not handle.pause_event.is_set()
                 )
                 handle.stop_event.set()
+                wake = getattr(handle.worker, "wake_verification", None)
+                if callable(wake):
+                    wake()
                 handle.stopping = True
                 handle.preserve_restart_marker = should_restart
                 if not getattr(handle.worker, "_persistence_blocked", False):

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, EmailStr, Field, root_validator, validator
+from pydantic import BaseModel, EmailStr, Field, StrictStr, root_validator, validator
 
 from .proxy import parse_proxy_url
 
@@ -177,6 +177,30 @@ class TaskResponse(BaseModel):
 
     class Config:
         extra = "forbid"
+
+
+class EmailCodeRequest(BaseModel):
+    code: StrictStr = Field(..., min_length=4, max_length=12, regex=r"^[0-9]+$")
+
+    class Config:
+        extra = "forbid"
+
+
+class LoginStateResponse(BaseModel):
+    task_id: str
+    status: str
+    waiting: bool
+    attempts: int = Field(..., ge=0)
+    remaining_seconds: int = Field(..., ge=0)
+    last_error: Optional[str] = None
+
+    class Config:
+        extra = "forbid"
+
+
+class LoginActionResponse(LoginStateResponse):
+    result: Literal["accepted", "cancelled", "rejected"]
+    message: str
 
 
 class SettingsUpdate(BaseModel):

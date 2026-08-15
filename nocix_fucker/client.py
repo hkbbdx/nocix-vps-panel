@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import tempfile
 import time
@@ -179,6 +180,225 @@ class Client:
         self._wait = wait
         self._proxy_extension_dir = extension_dir
         self.last_price_text: str | None = None
+
+    def _find_visible_element(self, selectors: tuple[tuple[str, str], ...]) -> WebElement | None:
+        elements = self._find_visible_elements(selectors)
+        return elements[0] if elements else None
+
+    def _find_visible_elements(
+        self, selectors: tuple[tuple[str, str], ...]
+    ) -> list[WebElement]:
+        def find(driver):
+            visible_elements = []
+            for find_by, find_value in selectors:
+                try:
+                    elements = driver.find_elements(find_by, find_value)
+                except Exception:
+                    continue
+                for element in elements:
+                    try:
+                        if element.is_displayed():
+                            visible_elements.append(element)
+                    except Exception:
+                        continue
+            return visible_elements or False
+
+        try:
+            return self._wait.until(find)
+        except exceptions.TimeoutException:
+            return []
+
+    def _visible_login_form_controls(
+        self, container: WebElement
+    ) -> tuple[WebElement, WebElement, WebElement] | None:
+        def descendant(selectors: tuple[tuple[str, str], ...]) -> WebElement | None:
+            for find_by, find_value in selectors:
+                try:
+                    elements = container.find_elements(find_by, find_value)
+                except Exception:
+                    continue
+                for element in elements:
+                    try:
+                        if element.is_displayed():
+                            return element
+                    except Exception:
+                        continue
+            return None
+
+        email = descendant(
+            (
+                (By.NAME, "existing_username"),
+                (By.NAME, "email"),
+                (By.CSS_SELECTOR, "input[type='email']"),
+            )
+        )
+        password = descendant(
+            (
+                (By.NAME, "existing_password"),
+                (By.NAME, "password"),
+                (By.CSS_SELECTOR, "input[type='password']"),
+            )
+        )
+        submit = descendant(
+            (
+                (By.CLASS_NAME, "hvr-sweep-to-right"),
+                (By.CSS_SELECTOR, "button[type='submit']"),
+                (By.CSS_SELECTOR, "input[type='submit']"),
+            )
+        )
+        if email is None or password is None or submit is None:
+            return None
+        owners = []
+        for control in (email, password, submit):
+            try:
+                owner = control.find_elements(By.XPATH, "ancestor::form[1]")
+            except Exception:
+                owner = []
+            if owner:
+                owners.append(owner[0])
+        if owners and len(owners) != 3:
+            return None
+        if owners and any(owner != owners[0] for owner in owners[1:]):
+            return None
+        return email, password, submit
+
+    def _visible_login_form(self) -> tuple[WebElement, WebElement, WebElement] | None:
+        containers = self._find_visible_elements(
+            (
+                (By.CSS_SELECTOR, "form[name='existing_customer']"),
+                (By.CSS_SELECTOR, "form#existing_customer"),
+                (By.CSS_SELECTOR, "form.existing-customer"),
+                (By.CSS_SELECTOR, "[data-testid='existing-customer-form']"),
+                (By.TAG_NAME, "form"),
+            )
+        )
+        for container in containers:
+            controls = self._visible_login_form_controls(container)
+            if controls is not None:
+                return controls
+
+        common_ancestors = self._find_visible_elements(
+            (
+                (
+                    By.XPATH,
+                    "//*[.//input[@name='existing_username'] and "
+                    ".//input[@name='existing_password'] and "
+                    "(.//button[@type='submit'] or .//input[@type='submit'] or "
+                    ".//*[contains(@class, 'hvr-sweep-to-right')])]",
+                ),
+            )
+        )
+        for ancestor in common_ancestors:
+            controls = self._visible_login_form_controls(ancestor)
+            if controls is not None:
+                return controls
+        return None
+
+    def login_existing_customer(self, email: str, password: str) -> bool:
+        """Submit the visible existing-customer form twice and expose code state."""
+        form = self._visible_login_form()
+        if form is None:
+            return False
+
+        for _ in range(2):
+            try:
+                form[0].clear()
+                form[1].clear()
+                form[0].send_keys(email)
+                form[1].send_keys(password)
+                form[2].click()
+            except Exception:
+                return False
+
+            if _ == 0:
+                form = self._visible_login_form()
+                if form is None:
+                    return False
+
+        return True
+
+    def is_email_code_required(self) -> bool:
+        code_field = self._find_visible_element(
+            (
+                (By.CSS_SELECTOR, "input[name='email_code']"),
+                (By.CSS_SELECTOR, "input[name='verification_code']"),
+                (By.CSS_SELECTOR, "input[name='code']"),
+                (By.CSS_SELECTOR, "input[autocomplete='one-time-code']"),
+                (By.ID, "email_code"),
+                (By.ID, "verification_code"),
+            )
+        )
+        if code_field is not None:
+            return True
+
+        marker = self._find_visible_element(
+            (
+                (By.CSS_SELECTOR, "[data-testid='email-code']"),
+                (By.CSS_SELECTOR, "form[data-purpose='email-verification']"),
+                (By.ID, "email-code-form"),
+            )
+        )
+        if marker is not None:
+            return True
+
+        body = self._find_visible_element(((By.TAG_NAME, "body"),))
+        if body is None:
+            return False
+        page_text = " ".join((getattr(body, "text", "") or "").lower().split())
+        return any(
+            marker_text in page_text
+            for marker_text in (
+                "verification code",
+                "email verification",
+                "one-time code",
+            )
+        )
+
+    def submit_email_code(self, code: str) -> bool:
+        if not isinstance(code, str) or re.fullmatch(r"[0-9]{4,12}", code) is None:
+            return False
+
+        field = self._find_visible_element(
+            (
+                (By.CSS_SELECTOR, "input[name='email_code']"),
+                (By.CSS_SELECTOR, "input[name='verification_code']"),
+                (By.CSS_SELECTOR, "input[name='code']"),
+                (By.CSS_SELECTOR, "input[autocomplete='one-time-code']"),
+                (By.ID, "email_code"),
+                (By.ID, "verification_code"),
+            )
+        )
+        if field is None:
+            return False
+
+        try:
+            field.clear()
+            field.send_keys(code)
+            submit = self._find_visible_element(
+                (
+                    (By.CSS_SELECTOR, "button[type='submit']"),
+                    (By.CSS_SELECTOR, "input[type='submit']"),
+                    (By.CSS_SELECTOR, ".email-code-submit"),
+                )
+            )
+            if submit is None:
+                field.clear()
+                return False
+            submit.click()
+            self._wait.until(lambda driver: not self.is_email_code_required())
+            return True
+        except exceptions.TimeoutException:
+            try:
+                field.clear()
+            except Exception:
+                pass
+            return False
+        except Exception:
+            try:
+                field.clear()
+            except Exception:
+                pass
+            return False
 
     def close(self) -> None:
         logger.trace("Closing windows and disconnecting from remote browser")

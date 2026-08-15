@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import inspect
+import re
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse, urlunsplit
 
@@ -17,6 +19,116 @@ ClientFactory = Callable[[], Any]
 Repository = Any
 LogCallback = Callable[..., None]
 NotifierCallback = Callable[[str], None]
+
+
+@dataclass
+class VerificationState:
+    """Private, thread-safe coordination state for one login session."""
+
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    event: threading.Event = field(default_factory=threading.Event)
+    pending_code: str | None = None
+    deadline: float = 0.0
+    attempts: int = 0
+    last_error: str | None = None
+    status: str = "stopped"
+    cancelled: bool = False
+    attempt_in_flight: bool = False
+
+    def begin(self, deadline: float) -> None:
+        with self.lock:
+            self.deadline = deadline
+            self.pending_code = None
+            self.attempt_in_flight = False
+            self.cancelled = False
+            self.last_error = None
+            self.event.clear()
+
+    def submit(self, code: str, now: float) -> bool:
+        with self.lock:
+            if self.cancelled or self.pending_code is not None:
+                return False
+            if self.attempt_in_flight:
+                return False
+            if now >= self.deadline:
+                self.pending_code = None
+                self.event.set()
+                return False
+            self.pending_code = code
+            self.event.set()
+            return True
+
+    def consume(self, now: float) -> tuple[str | None, str | None]:
+        with self.lock:
+            code = self.pending_code
+            if code is not None and now >= self.deadline:
+                self.pending_code = None
+                self.event.clear()
+                return "timeout", None
+            self.pending_code = None
+            cancelled = self.cancelled
+            self.event.clear()
+            if code is not None:
+                self.attempts += 1
+                self.attempt_in_flight = True
+                return "code", code
+            return ("cancel", None) if cancelled else (None, None)
+
+    def finalize_attempt(
+        self,
+        accepted: bool,
+        now: float,
+        stop_event: threading.Event,
+        pause_event: threading.Event,
+    ) -> str:
+        with self.lock:
+            self.pending_code = None
+            self.attempt_in_flight = False
+            if self.cancelled:
+                return "cancelled"
+            if stop_event.is_set() or pause_event.is_set():
+                return "interrupted"
+            if now >= self.deadline:
+                return "timeout"
+            return "accepted" if accepted else "rejected"
+
+    def cancel(self, message: str) -> bool:
+        with self.lock:
+            self.cancelled = True
+            self.pending_code = None
+            self.last_error = message
+            self.event.set()
+            return True
+
+    def wake(self) -> None:
+        with self.lock:
+            self.event.set()
+
+    def set_error(self, message: str | None) -> None:
+        with self.lock:
+            self.last_error = message
+
+    def public(self, task_id: str, status: str, clock: Callable[[], float]) -> dict:
+        with self.lock:
+            remaining = max(0.0, self.deadline - clock()) if self.deadline else 0.0
+            return {
+                "task_id": task_id,
+                "status": status,
+                "waiting": status == "waiting_for_email_code" and not self.cancelled,
+                "attempts": self.attempts,
+                "remaining_seconds": int(remaining + 0.999) if remaining else 0,
+                "last_error": self.last_error,
+            }
+
+    def cleanup(self) -> None:
+        with self.lock:
+            self.pending_code = None
+            self.attempt_in_flight = False
+            self.deadline = 0.0
+            self.attempts = 0
+            self.last_error = None
+            self.cancelled = True
+            self.event.clear()
 
 
 class CheckoutWorker:
@@ -34,6 +146,7 @@ class CheckoutWorker:
         clock: Callable[[], float] = time.monotonic,
         stop_event: threading.Event | None = None,
         pause_event: threading.Event | None = None,
+        verification_timeout: float = 300.0,
     ) -> None:
         self.task = task
         self.client_factory = client_factory
@@ -47,6 +160,7 @@ class CheckoutWorker:
         self.notifier = notifier or (lambda message: None)
         self.sleep = sleep
         self.clock = clock
+        self.verification_timeout = max(0.0, float(verification_timeout))
         self.stop_event = stop_event or threading.Event()
         self.pause_event = pause_event or threading.Event()
         self._run_lock = threading.Lock()
@@ -57,6 +171,7 @@ class CheckoutWorker:
         self._submit_called = False
         self._phase = "checking"
         self._order_attempt_started = False
+        self._verification = VerificationState(status="stopped")
         self._logger_accepts_level = logger is None or self._callback_accepts_level(logger)
 
     def _value(self, name: str, default: Any = None) -> Any:
@@ -113,6 +228,8 @@ class CheckoutWorker:
             self._callback_warning("notifier", exc)
 
     def _set_status(self, status: str, error: str | None = None) -> None:
+        with self._verification.lock:
+            self._verification.status = status
         try:
             self.repository.set_task_status(self._task_id(), status, error=error)
         except Exception as exc:
@@ -232,13 +349,113 @@ class CheckoutWorker:
 
     def _interrupt_requested(self) -> bool:
         if self.stop_event.is_set():
+            self._verification.wake()
             self._terminal = True
             self._set_status("stopped")
             return True
         if self.pause_event.is_set():
+            self._verification.wake()
             self._set_status("paused")
             return True
         return False
+
+    def get_login_state(self) -> dict:
+        with self._verification.lock:
+            status = self._verification.status
+        return self._verification.public(self._task_id(), status, self.clock)
+
+    def submit_email_code(self, code: str) -> dict:
+        with self._verification.lock:
+            in_flight = self._verification.attempt_in_flight
+            waiting = self._verification.status == "waiting_for_email_code"
+        if in_flight:
+            state = self.get_login_state()
+            return {
+                "accepted": False,
+                "status": state["status"],
+                "message": "verification attempt already in flight",
+            }
+        if not isinstance(code, str) or re.fullmatch(r"[0-9]{4,12}", code) is None:
+            state = self.get_login_state()
+            return {
+                "accepted": False,
+                "status": state["status"],
+                "message": "invalid verification code",
+            }
+        if not waiting or not self._verification.submit(code, self.clock()):
+            state = self.get_login_state()
+            return {
+                "accepted": False,
+                "status": state["status"],
+                "message": "login verification is not accepting a code",
+            }
+        state = self.get_login_state()
+        return {"accepted": True, "status": state["status"], "message": "code submitted"}
+
+    def cancel_verification(self, message: str = "verification cancelled") -> bool:
+        with self._verification.lock:
+            waiting = self._verification.status == "waiting_for_email_code"
+        return waiting and self._verification.cancel(message)
+
+    def wake_verification(self) -> None:
+        self._verification.wake()
+
+    def _wait_for_email_code(self, client: Any) -> bool:
+        self._verification.begin(self.clock() + self.verification_timeout)
+        self._set_status("waiting_for_email_code")
+        while True:
+            if self._interrupt_requested():
+                return False
+            with self._verification.lock:
+                remaining = max(0.0, self._verification.deadline - self.clock())
+            if remaining <= 0:
+                self._verification.set_error("email verification failed")
+                self._fail("email verification failed")
+                return False
+            self._verification.event.wait(timeout=remaining)
+            if self._interrupt_requested():
+                return False
+            action, code = self._verification.consume(self.clock())
+            if action == "cancel":
+                self._fail("verification cancelled", level="WARNING")
+                return False
+            if action == "timeout":
+                self._fail("email verification failed")
+                return False
+            if action != "code" or code is None:
+                continue
+            try:
+                accepted = bool(client.submit_email_code(code))
+            except Exception:
+                outcome = self._verification.finalize_attempt(
+                    False, self.clock(), self.stop_event, self.pause_event
+                )
+                if outcome == "cancelled":
+                    self._fail("verification cancelled", level="WARNING")
+                elif outcome == "interrupted":
+                    self._interrupt_requested()
+                elif outcome == "timeout":
+                    self._fail("email verification failed")
+                else:
+                    self._fail("email verification failed")
+                return False
+            outcome = self._verification.finalize_attempt(
+                accepted, self.clock(), self.stop_event, self.pause_event
+            )
+            if outcome == "cancelled":
+                self._fail("verification cancelled", level="WARNING")
+                return False
+            if outcome == "interrupted":
+                self._interrupt_requested()
+                return False
+            if outcome == "timeout":
+                self._fail("email verification failed")
+                return False
+            if outcome == "accepted":
+                self._verification.set_error(None)
+                return True
+            self._verification.set_error("email verification failed")
+            self._set_status("waiting_for_email_code", "email verification failed")
 
     def _wait(self, seconds: float) -> bool:
         # The adapter deliberately wakes at most once per second so lifecycle
@@ -388,6 +605,31 @@ class CheckoutWorker:
             self._call_with_url(client.open_cart, self._value("goods_id"), cart_url)
             if self._interrupt_requested():
                 return
+
+            login = getattr(client, "login_existing_customer", None)
+            if callable(login):
+                password = self.repository.get_decrypted_password(self._task_id())
+                self._phase = "login_first"
+                self._set_status("login_first")
+                try:
+                    login_ok = bool(login(self._value("email"), password))
+                except Exception:
+                    self._fail("login failed", level="WARNING")
+                    return
+                self._phase = "login_second"
+                self._set_status("login_second")
+                try:
+                    code_required = bool(client.is_email_code_required())
+                except Exception:
+                    self._fail("email verification failed")
+                    return
+                if not login_ok and not code_required:
+                    self._fail("login failed", level="WARNING")
+                    return
+                if code_required and not self._wait_for_email_code(client):
+                    return
+                self._set_status("ordering")
+
             redirect = self._paypal_redirect(client)
             if redirect:
                 self._fail(f"PayPal redirect blocked at url={redirect}")
@@ -474,6 +716,7 @@ class CheckoutWorker:
             else:
                 self._fail(str(exc))
         finally:
+            self._verification.cleanup()
             if client is not None:
                 try:
                     client.close()

@@ -92,6 +92,15 @@ export const api = {
       request<unknown>(`/api/tasks/${id}/${action}`, { method: "POST" }),
     history: (id: string) =>
       request<import("./types").TaskHistoryEntry[]>(`/api/tasks/${id}/history`),
+    loginState: (id: string) =>
+      request<import("./types").LoginState>(`/api/tasks/${id}/login-state`),
+    submitEmailCode: (id: string, code: string) =>
+      request<import("./types").LoginActionResult>(`/api/tasks/${id}/email-code`, {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      }),
+    cancelLogin: (id: string) =>
+      request<import("./types").LoginActionResult>(`/api/tasks/${id}/login-cancel`, { method: "POST" }),
   },
   stats: () => request<import("./types").Stats>("/api/stats"),
   orders: {

@@ -315,7 +315,10 @@ class Repository:
         a stale stop request, while a stop committed first is visible to the
         worker's atomic submission finalization.
         """
-        stoppable_statuses = ("stopped", "running", "checking", "ordering", "paused")
+        stoppable_statuses = (
+            "stopped", "running", "checking", "ordering",
+            "login_first", "login_second", "waiting_for_email_code", "paused",
+        )
         terminal_statuses = (
             "success",
             "failed",
@@ -347,7 +350,10 @@ class Repository:
 
     def pause_task(self, task_id: str, *, expected_marker: bool) -> TaskRecord:
         """Pause only the unchanged active owner of a task."""
-        active_statuses = ("running", "checking", "ordering")
+        active_statuses = (
+            "running", "checking", "ordering",
+            "login_first", "login_second", "waiting_for_email_code",
+        )
         terminal_statuses = (
             "success",
             "failed",
@@ -390,7 +396,10 @@ class Repository:
         error: str | None,
     ) -> TaskRecord:
         """Persist task and order outcome as one conditional transaction."""
-        active_statuses = ("running", "checking", "ordering")
+        active_statuses = (
+            "running", "checking", "ordering",
+            "login_first", "login_second", "waiting_for_email_code",
+        )
         indeterminate_status = "submitted_pending_confirmation"
         indeterminate_error = error or "submission outcome is unknown"
         with self.session_factory() as session:
@@ -447,7 +456,10 @@ class Repository:
         running_before_shutdown: bool,
     ) -> TaskRecord:
         """Transition only an unchanged active task during manager shutdown."""
-        active_statuses = ("running", "checking", "ordering")
+        active_statuses = (
+            "running", "checking", "ordering",
+            "login_first", "login_second", "waiting_for_email_code",
+        )
         terminal_statuses = (
             "success",
             "failed",
@@ -490,7 +502,18 @@ class Repository:
     def recover_active_tasks(self) -> int:
         with self.session_factory() as session:
             models = session.scalars(
-                select(Task).where(Task.status.in_(("running", "checking", "ordering")))
+                select(Task).where(
+                    Task.status.in_(
+                        (
+                            "running",
+                            "checking",
+                            "ordering",
+                            "login_first",
+                            "login_second",
+                            "waiting_for_email_code",
+                        )
+                    )
+                )
             ).all()
             for model in models:
                 model.status = "stopped"
@@ -504,7 +527,16 @@ class Repository:
             models = session.scalars(
                 select(Task).where(
                     or_(
-                        Task.status.in_(("running", "checking", "ordering")),
+                        Task.status.in_(
+                            (
+                                "running",
+                                "checking",
+                                "ordering",
+                                "login_first",
+                                "login_second",
+                                "waiting_for_email_code",
+                            )
+                        ),
                         Task.running_before_shutdown.is_(True),
                     ),
                     Task.status.not_in(("success", "failed")),

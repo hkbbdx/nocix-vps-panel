@@ -90,4 +90,38 @@ describe("API client", () => {
       body: JSON.stringify({ proxy_url: "socks5://draft-user:draft-pass@proxy.example.com:1080" }),
     }));
   });
+
+  it("uses the protected login-state, email-code, and cancel endpoints", async () => {
+    setApiKey("login-session-key");
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        task_id: "task-1", status: "waiting_for_email_code", waiting: true,
+        attempts: 1, remaining_seconds: 120, last_error: null,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        task_id: "task-1", status: "login_second", waiting: false,
+        attempts: 1, remaining_seconds: 0, last_error: null,
+        result: "accepted", message: "verification accepted",
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        task_id: "task-1", status: "stopped", waiting: false,
+        attempts: 1, remaining_seconds: 0, last_error: "verification cancelled",
+        result: "cancelled", message: "verification cancelled",
+      }), { status: 200 }));
+
+    await api.tasks.loginState("task-1");
+    await api.tasks.submitEmailCode("task-1", "1234");
+    await api.tasks.cancelLogin("task-1");
+
+    expect(fetchSpy.mock.calls.map(([path, init]) => ({
+      path,
+      method: init?.method,
+      body: init?.body,
+      key: (init?.headers as Headers).get("X-API-Key"),
+    }))).toEqual([
+      { path: "/api/tasks/task-1/login-state", method: undefined, body: undefined, key: "login-session-key" },
+      { path: "/api/tasks/task-1/email-code", method: "POST", body: JSON.stringify({ code: "1234" }), key: "login-session-key" },
+      { path: "/api/tasks/task-1/login-cancel", method: "POST", body: undefined, key: "login-session-key" },
+    ]);
+  });
 });

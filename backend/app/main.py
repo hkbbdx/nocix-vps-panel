@@ -4,8 +4,11 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -13,7 +16,7 @@ from .config import Settings, get_settings
 from .db import create_engine, create_session_factory, init_db
 from .manager import TaskManager
 from .repositories import Repository
-from .routers import logs, orders, proxy, settings as settings_router, stats, tasks
+from .routers import logs, login, orders, proxy, settings as settings_router, stats, tasks
 from .telegram import TelegramNotifier
 from .worker import CheckoutWorker
 
@@ -77,6 +80,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="NOCIX VPS Panel API", lifespan=lifespan)
     app.dependency_overrides[get_settings] = lambda: runtime_settings
+
+    @app.exception_handler(RequestValidationError)
+    async def safe_login_validation_errors(
+        request: Request, exc: RequestValidationError
+    ):
+        if request.url.path.endswith("/email-code"):
+            return JSONResponse(
+                status_code=422,
+                content={"detail": "Invalid email verification code request"},
+            )
+        return await request_validation_exception_handler(request, exc)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost", "http://127.0.0.1"],
@@ -85,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["X-API-Key", "Content-Type"],
     )
     app.include_router(tasks.router)
+    app.include_router(login.router)
     app.include_router(orders.router)
     app.include_router(logs.router)
     app.include_router(settings_router.router)

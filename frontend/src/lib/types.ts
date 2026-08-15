@@ -5,9 +5,12 @@ export type TaskStatus =
   | "ordering"
   | "paused"
   | "success"
-  | "failed"
-  | "unknown"
-  | "submitted_pending_confirmation";
+   | "failed"
+   | "unknown"
+   | "submitted_pending_confirmation"
+   | "login_first"
+   | "login_second"
+   | "waiting_for_email_code";
 
 export type ProxyMode = "inherit" | "custom" | "direct";
 
@@ -109,4 +112,18 @@ export interface ProxyTestResult {
 
 export interface TaskHistoryEntry extends Order {
   [key: string]: unknown;
+}
+
+export interface LoginState {
+  task_id: string;
+  status: TaskStatus;
+  waiting: boolean;
+  attempts: number;
+  remaining_seconds: number;
+  last_error: string | null;
+}
+
+export interface LoginActionResult extends LoginState {
+  result: "accepted" | "rejected" | "cancelled";
+  message: string;
 }
